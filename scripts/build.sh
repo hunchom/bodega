@@ -3,7 +3,13 @@
 # Equivalent to `make build` for hosts without CLT installed.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+SCRIPT="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT" ]; do
+  DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+  TARGET="$(readlink "$SCRIPT")"
+  case "$TARGET" in /*) SCRIPT="$TARGET" ;; *) SCRIPT="$DIR/$TARGET" ;; esac
+done
+cd "$(cd "$(dirname "$SCRIPT")" && pwd)/.."
 
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"

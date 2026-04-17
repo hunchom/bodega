@@ -5,7 +5,13 @@
 # then runs the legacy-yum zshrc patcher. Safe to re-run.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT" ]; do
+  DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+  TARGET="$(readlink "$SCRIPT")"
+  case "$TARGET" in /*) SCRIPT="$TARGET" ;; *) SCRIPT="$DIR/$TARGET" ;; esac
+done
+ROOT="$(cd "$(cd "$(dirname "$SCRIPT")" && pwd)/.." && pwd)"
 cd "$ROOT"
 
 BIN_DIR="${HOME}/.local/bin"
