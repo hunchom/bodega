@@ -40,5 +40,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newAutoremoveCmd())
 	root.AddCommand(newInfoCmd())
 	root.AddCommand(newOutdatedCmd())
+	root.AddCommand(newTreeCmd())
+	root.AddCommand(newWhyCmd())
 	return root
 }
