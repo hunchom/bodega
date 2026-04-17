@@ -60,10 +60,10 @@ for cmd in "${CMDS[@]}"; do
   if hyperfine --warmup "$WARMUP" --runs "$RUNS" --export-json "$TMP_JSON" \
        --show-output --command-name "yum $cmd" "$YUM_BIN $cmd" \
        >/dev/null 2>&1; then
-    mean_s=$(python3 -c "import json; d=json.load(open('$TMP_JSON')); print(d['results'][0]['mean'])")
-    sd_s=$(python3   -c "import json; d=json.load(open('$TMP_JSON')); print(d['results'][0]['stddev'])")
-    min_s=$(python3  -c "import json; d=json.load(open('$TMP_JSON')); print(d['results'][0]['min'])")
-    max_s=$(python3  -c "import json; d=json.load(open('$TMP_JSON')); print(d['results'][0]['max'])")
+    mean_s=$(jq -r '.results[0].mean'   "$TMP_JSON")
+    sd_s=$(jq -r '.results[0].stddev'   "$TMP_JSON")
+    min_s=$(jq -r '.results[0].min'     "$TMP_JSON")
+    max_s=$(jq -r '.results[0].max'     "$TMP_JSON")
     mean=$(awk "BEGIN{printf \"%.1f\", $mean_s*1000}")
     sd=$(awk   "BEGIN{printf \"%.1f\", $sd_s*1000}")
     mn=$(awk   "BEGIN{printf \"%.1f\", $min_s*1000}")
