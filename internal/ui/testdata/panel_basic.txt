@@ -1,0 +1,5 @@
+┌ [1mripgrep[0m
+│ version  14.1.0
+│ tap      homebrew/core
+│ size     5.2 MB
+└
