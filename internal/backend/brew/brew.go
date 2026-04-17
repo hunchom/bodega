@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/hunchom/yum/internal/backend"
@@ -203,28 +204,35 @@ func linesToPkgs(b []byte, src backend.Source) []backend.Package {
 	return pkgs
 }
 
-// Autoremove, Install, Remove, Reinstall, Upgrade come next task (they stream output).
-func (b *Brew) Install(ctx context.Context, names []string, _ backend.ProgressWriter) error {
-	_, err := b.R.Run(ctx, "brew", append([]string{"install"}, names...)...)
-	return err
+func (b *Brew) stream(ctx context.Context, w backend.ProgressWriter, args ...string) error {
+	var sink io.Writer = io.Discard
+	if w != nil {
+		sink = w
+	}
+	r, err := b.R.Stream(ctx, sink, sink, "brew", args...)
+	if err != nil {
+		return err
+	}
+	if r.ExitCode != 0 {
+		return fmt.Errorf("brew %s: exit %d", args[0], r.ExitCode)
+	}
+	return nil
 }
-func (b *Brew) Remove(ctx context.Context, names []string, _ backend.ProgressWriter) error {
-	_, err := b.R.Run(ctx, "brew", append([]string{"uninstall"}, names...)...)
-	return err
+
+func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWriter) error {
+	return b.stream(ctx, w, append([]string{"install"}, names...)...)
 }
-func (b *Brew) Reinstall(ctx context.Context, names []string, _ backend.ProgressWriter) error {
-	_, err := b.R.Run(ctx, "brew", append([]string{"reinstall"}, names...)...)
-	return err
+func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWriter) error {
+	return b.stream(ctx, w, append([]string{"uninstall"}, names...)...)
 }
-func (b *Brew) Upgrade(ctx context.Context, names []string, _ backend.ProgressWriter) error {
-	args := []string{"upgrade"}
-	args = append(args, names...)
-	_, err := b.R.Run(ctx, "brew", args...)
-	return err
+func (b *Brew) Reinstall(ctx context.Context, names []string, w backend.ProgressWriter) error {
+	return b.stream(ctx, w, append([]string{"reinstall"}, names...)...)
 }
-func (b *Brew) Autoremove(ctx context.Context, _ backend.ProgressWriter) error {
-	_, err := b.R.Run(ctx, "brew", "autoremove")
-	return err
+func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWriter) error {
+	return b.stream(ctx, w, append([]string{"upgrade"}, names...)...)
+}
+func (b *Brew) Autoremove(ctx context.Context, w backend.ProgressWriter) error {
+	return b.stream(ctx, w, "autoremove")
 }
 
 // Helper JSON types (narrow — ignore fields we don't use).
