@@ -8,9 +8,9 @@ COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE      := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 LDFLAGS := -s -w \
-  -X github.com/hunchom/yum/internal/version.Version=$(VERSION) \
-  -X github.com/hunchom/yum/internal/version.Commit=$(COMMIT) \
-  -X github.com/hunchom/yum/internal/version.Date=$(DATE)
+  -X github.com/hunchom/bodega/internal/version.Version=$(VERSION) \
+  -X github.com/hunchom/bodega/internal/version.Commit=$(COMMIT) \
+  -X github.com/hunchom/bodega/internal/version.Date=$(DATE)
 
 .PHONY: all build install uninstall test lint clean completions
 

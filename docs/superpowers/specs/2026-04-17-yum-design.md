@@ -1,7 +1,6 @@
 # yum — Modern Package Manager for macOS
 
 **Status:** Approved design, 2026-04-17
-**Owner:** hunchom
 
 ## Problem
 
