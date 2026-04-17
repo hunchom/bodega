@@ -72,6 +72,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n-1] + "…"
 }
-
-// temporary until install.go lands (next task)
-func runInstall(_ *AppCtx, _ []string) error { return nil }
