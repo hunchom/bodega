@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -11,6 +12,7 @@ import (
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/journal"
 	"github.com/hunchom/bodega/internal/ui/theme"
+	"github.com/hunchom/bodega/internal/version"
 )
 
 func newInstallCmd() *cobra.Command {
@@ -31,6 +33,11 @@ func newInstallCmd() *cobra.Command {
 
 // runInstall is shared by install and search --install.
 func runInstall(app *AppCtx, names []string) error {
+	for _, n := range names {
+		if strings.TrimSpace(n) == "" {
+			return fmt.Errorf("install: empty package name")
+		}
+	}
 	if Flags.DryRun {
 		app.W.Printf("%s would install %s\n", theme.Muted.Render("dry-run"), strings.Join(names, " "))
 		return nil
@@ -86,10 +93,18 @@ func runInstall(app *AppCtx, names []string) error {
 	return nil
 }
 
-func versionStr() string { return "dev" } // populated later from version pkg
+func versionStr() string { return version.Version }
+
+// brewVersion returns the first line of `brew --version` output, or "" if brew
+// isn't on PATH or the probe fails. Stored in the journal so audits can tell
+// which brew produced a given transaction.
 func brewVersion() string {
-	// best-effort; returns "" if brew not on PATH
-	return ""
+	out, err := exec.Command("brew", "--version").Output()
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	return line
 }
 
 func versionOf(app *AppCtx, name string) string {
