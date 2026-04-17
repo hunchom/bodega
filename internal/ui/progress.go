@@ -38,7 +38,7 @@ func (p *Progress) render() string {
 	return fmt.Sprintf("\r%s %s %s %3d%%",
 		theme.Muted.Render(p.Prefix),
 		theme.Accent.Render(bar),
-		theme.Muted.Render(humanBytes(cur)+"/"+humanBytes(p.Total)),
+		theme.Muted.Render(HumanBytes(cur)+"/"+HumanBytes(p.Total)),
 		pct)
 }
 
@@ -72,7 +72,7 @@ func (p *Progress) Done(ok bool) {
 	fmt.Fprintf(p.Out, "\r%s %s %s\n", mark, p.Prefix, theme.Muted.Render(elapsed.String()))
 }
 
-func humanBytes(n int64) string {
+func HumanBytes(n int64) string {
 	const k = 1024.0
 	f := float64(n)
 	for _, u := range []string{"B", "KB", "MB", "GB"} {
