@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,6 +118,9 @@ func (j *Journal) Get(ctx context.Context, id int64) (*Transaction, error) {
 	var t Transaction
 	var s, e int64
 	if err := row.Scan(&t.ID, &s, &e, &t.Verb, &t.ExitCode, &t.Cmdline, &t.YumVersion, &t.BrewVersion); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("transaction %d not found", id)
+		}
 		return nil, err
 	}
 	t.StartedAt = time.Unix(s, 0)
