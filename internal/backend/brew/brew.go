@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/runner"
@@ -17,6 +20,33 @@ type Brew struct {
 }
 
 func New(r runner.Runner) *Brew { return &Brew{R: r} }
+
+// brewPrefix returns the Homebrew install prefix, cached for the lifetime of
+// the process. We try /opt/homebrew (Apple Silicon) first; that's a single
+// os.Stat instead of exec("brew --prefix") on the hot path. If neither of
+// the two standard paths exist we return "" and callers fall back to their
+// previous `brew` subprocess behaviour. Tests can set disablePrefixCache to
+// force the subprocess path.
+var (
+	brewPrefixOnce     sync.Once
+	brewPrefixCache    string
+	disablePrefixCache bool // tests only — bypasses Cellar fast path
+)
+
+func brewPrefix() string {
+	if disablePrefixCache {
+		return ""
+	}
+	brewPrefixOnce.Do(func() {
+		for _, p := range []string{"/opt/homebrew", "/usr/local"} {
+			if st, err := os.Stat(p + "/Cellar"); err == nil && st.IsDir() {
+				brewPrefixCache = p
+				return
+			}
+		}
+	})
+	return brewPrefixCache
+}
 
 func (b *Brew) Name() string { return "brew" }
 
@@ -59,8 +89,14 @@ func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) 
 func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Package, error) {
 	switch f {
 	case "", backend.ListInstalled:
+		if pkgs, ok := listCellarFormulae(); ok {
+			return pkgs, nil
+		}
 		return b.parseListVersions(ctx, "--formula")
 	case backend.ListCasks:
+		if pkgs, ok := listCaskroom(); ok {
+			return pkgs, nil
+		}
 		return b.parseListVersions(ctx, "--cask")
 	case backend.ListOutdated:
 		return b.Outdated(ctx)
@@ -74,6 +110,9 @@ func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Packag
 		}
 		return linesToPkgs(out.Stdout, backend.SrcFormula), nil
 	case backend.ListPinned:
+		if pkgs, ok := listPinned(); ok {
+			return pkgs, nil
+		}
 		out, err := b.R.Run(ctx, "brew", "list", "--pinned")
 		if err != nil {
 			return nil, err
@@ -97,6 +136,112 @@ func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Packag
 		return linesToPkgs(out.Stdout, backend.SrcFormula), nil
 	}
 	return nil, fmt.Errorf("unknown list filter: %q", f)
+}
+
+// listCellarFormulae reads /<prefix>/Cellar/ directly. Each entry is a
+// formula name; the newest non-dot subdir is its installed version.
+// Returns (nil, false) if the prefix isn't discoverable or the Cellar
+// dir can't be read, which punts back to the `brew list` subprocess.
+func listCellarFormulae() ([]backend.Package, bool) {
+	prefix := brewPrefix()
+	if prefix == "" {
+		return nil, false
+	}
+	entries, err := os.ReadDir(prefix + "/Cellar")
+	if err != nil {
+		return nil, false
+	}
+	pkgs := make([]backend.Package, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		pkgs = append(pkgs, backend.Package{
+			Name:    e.Name(),
+			Source:  backend.SrcFormula,
+			Version: latestVersionDir(prefix + "/Cellar/" + e.Name()),
+		})
+	}
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].Name < pkgs[j].Name })
+	return pkgs, true
+}
+
+// listCaskroom does the same thing as listCellarFormulae for casks.
+// /<prefix>/Caskroom/<token>/<version>.
+func listCaskroom() ([]backend.Package, bool) {
+	prefix := brewPrefix()
+	if prefix == "" {
+		return nil, false
+	}
+	entries, err := os.ReadDir(prefix + "/Caskroom")
+	if err != nil {
+		return nil, false
+	}
+	pkgs := make([]backend.Package, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		pkgs = append(pkgs, backend.Package{
+			Name:    e.Name(),
+			Source:  backend.SrcCask,
+			Version: latestVersionDir(prefix + "/Caskroom/" + e.Name()),
+		})
+	}
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].Name < pkgs[j].Name })
+	return pkgs, true
+}
+
+// listPinned reads /<prefix>/var/homebrew/pinned/, a directory of symlinks
+// named after pinned formulae.
+func listPinned() ([]backend.Package, bool) {
+	prefix := brewPrefix()
+	if prefix == "" {
+		return nil, false
+	}
+	entries, err := os.ReadDir(prefix + "/var/homebrew/pinned")
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Nothing pinned yet — that's a success, just empty.
+			return []backend.Package{}, true
+		}
+		return nil, false
+	}
+	pkgs := make([]backend.Package, 0, len(entries))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		pkgs = append(pkgs, backend.Package{
+			Name:   e.Name(),
+			Source: backend.SrcFormula,
+			Pinned: true,
+		})
+	}
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].Name < pkgs[j].Name })
+	return pkgs, true
+}
+
+// latestVersionDir picks the lexicographically largest non-dot entry under a
+// formula/cask install dir. `brew list --versions` joins every installed
+// version with a space; we approximate that by picking one, which matches
+// the common case of a single installed version.
+func latestVersionDir(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	best := ""
+	for _, e := range entries {
+		n := e.Name()
+		if n == "" || strings.HasPrefix(n, ".") {
+			continue
+		}
+		if n > best {
+			best = n
+		}
+	}
+	return best
 }
 
 func (b *Brew) parseListVersions(ctx context.Context, flag string) ([]backend.Package, error) {

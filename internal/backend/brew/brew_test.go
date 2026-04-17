@@ -33,6 +33,11 @@ func TestInfoParsesFixture(t *testing.T) {
 }
 
 func TestListInstalled(t *testing.T) {
+	// Force the brew subprocess path so this test exercises the parser,
+	// not the Cellar fast path (which only works on real macOS installs).
+	disablePrefixCache = true
+	t.Cleanup(func() { disablePrefixCache = false })
+
 	fake := &runner.Fake{Stdout: map[string]string{
 		"brew list --formula --versions": "ripgrep 14.1.0\njq 1.7.1\n",
 	}}

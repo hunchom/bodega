@@ -77,7 +77,9 @@ func newSizeCmd() *cobra.Command {
 }
 
 func brewCellar() string {
-	// Prefer Apple Silicon, fallback to Intel.
+	// Prefer Apple Silicon, fallback to Intel. Kept local here rather
+	// than importing brew.brewPrefix() because that's intentionally
+	// unexported; both implementations prefer /opt/homebrew.
 	if st, err := os.Stat("/opt/homebrew/Cellar"); err == nil && st.IsDir() {
 		return "/opt/homebrew/Cellar"
 	}
