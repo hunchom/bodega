@@ -24,7 +24,7 @@ func newSizeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 
 			pkgs, err := app.Registry.Primary().List(app.Ctx, backend.ListInstalled)
 			if err != nil {

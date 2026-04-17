@@ -23,7 +23,7 @@ func newRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			return runMutate(app, "remove", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Remove(app.Ctx, names, pw)
 			}, "removed")
@@ -42,7 +42,7 @@ func newReinstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			return runMutate(app, "reinstall", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Reinstall(app.Ctx, names, pw)
 			}, "reinstalled")
@@ -60,7 +60,7 @@ func newUpgradeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			maybeRefreshTaps(app)
 			return runMutate(app, "upgrade", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Upgrade(app.Ctx, names, pw)
@@ -78,7 +78,7 @@ func newAutoremoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			return runMutate(app, "autoremove", nil, func(_ []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Autoremove(app.Ctx, pw)
 			}, "removed")
@@ -95,6 +95,9 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 	if Flags.DryRun {
 		app.W.Printf("%s would %s %s\n", theme.Muted.Render("dry-run"), verb, strings.Join(names, " "))
 		return nil
+	}
+	if err := app.ensureJournal(); err != nil {
+		return err
 	}
 	txID, err := app.Journal.Begin(app.Ctx, verb,
 		journal.Cmdline(append([]string{"yum", verb}, names...)), versionStr(), brewVersion())

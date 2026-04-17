@@ -16,7 +16,7 @@ func newSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			// sync always refreshes: it's an explicit "update everything".
 			if !Flags.NoRefresh {
 				Flags.Refresh = true

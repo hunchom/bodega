@@ -25,7 +25,7 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			maybeRefreshTaps(app)
 			return runInstall(app, args)
 		},
@@ -42,6 +42,9 @@ func runInstall(app *AppCtx, names []string) error {
 	if Flags.DryRun {
 		app.W.Printf("%s would install %s\n", theme.Muted.Render("dry-run"), strings.Join(names, " "))
 		return nil
+	}
+	if err := app.ensureJournal(); err != nil {
+		return err
 	}
 	txID, err := app.Journal.Begin(app.Ctx, "install",
 		journal.Cmdline(append([]string{"yum", "install"}, names...)),

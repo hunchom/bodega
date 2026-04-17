@@ -30,7 +30,7 @@ func newManifestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 
 			taps, _ := app.Registry.Primary().Taps(app.Ctx)
 			form, _ := app.Registry.Primary().List(app.Ctx, backend.ListInstalled)
@@ -71,7 +71,7 @@ func newManifestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			b, err := os.ReadFile(args[0])
 			if err != nil {
 				return err

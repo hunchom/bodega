@@ -19,7 +19,10 @@ func newHistoryCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
+			if err := app.ensureJournal(); err != nil {
+				return err
+			}
 			txs, err := app.Journal.Recent(app.Ctx, 50)
 			if err != nil {
 				return err
@@ -67,7 +70,10 @@ func newHistoryInfoCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
+			if err := app.ensureJournal(); err != nil {
+				return err
+			}
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return err
@@ -107,7 +113,10 @@ func newHistoryUndoCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
+			if err := app.ensureJournal(); err != nil {
+				return err
+			}
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return err

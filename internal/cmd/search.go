@@ -17,7 +17,7 @@ func newSearchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 
 			pkgs, err := app.Registry.Search(app.Ctx, args[0])
 			if err != nil {

@@ -17,7 +17,7 @@ func newProvidesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			names, err := app.Registry.Primary().Provides(app.Ctx, args[0])
 			if err != nil {
 				return err
@@ -42,7 +42,7 @@ func newRepolistCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			taps, err := app.Registry.Primary().Taps(app.Ctx)
 			if err != nil {
 				return err
@@ -68,7 +68,7 @@ func newCleanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			deep := len(args) == 1 && args[0] == "all"
 			return app.Registry.Primary().Cleanup(app.Ctx, deep)
 		},
@@ -89,7 +89,7 @@ func newPinCmd(pin bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			return app.Registry.Primary().Pin(app.Ctx, args[0], pin)
 		},
 	}

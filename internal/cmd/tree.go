@@ -29,7 +29,7 @@ func newTreeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			t, err := app.Registry.Primary().Deps(app.Ctx, args[0])
 			if err != nil {
 				return err
@@ -53,7 +53,7 @@ func newWhyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 			rdeps, err := app.Registry.Primary().ReverseDeps(app.Ctx, args[0])
 			if err != nil {
 				return err

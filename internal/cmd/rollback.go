@@ -19,7 +19,10 @@ func newRollbackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
+			if err := app.ensureJournal(); err != nil {
+				return err
+			}
 
 			var id int64
 			if len(args) == 1 {

@@ -19,7 +19,7 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 
 			warns, _ := app.Registry.Primary().Doctor(app.Ctx)
 

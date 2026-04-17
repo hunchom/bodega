@@ -22,7 +22,7 @@ type AppCtx struct {
 	Cfg      *config.Config
 	W        *ui.Writer
 	Registry *backend.Registry
-	Journal  *journal.Journal
+	Journal  *journal.Journal // nil until ensureJournal() is called
 }
 
 func boot() (*AppCtx, error) {
@@ -40,11 +40,6 @@ func boot() (*AppCtx, error) {
 	r := runner.Real{}
 	reg := &backend.Registry{Backends: []backend.Backend{brew.New(r)}}
 
-	j, err := journal.Open(journal.DefaultPath())
-	if err != nil {
-		return nil, err
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -52,7 +47,32 @@ func boot() (*AppCtx, error) {
 		<-sig
 		cancel()
 	}()
-	return &AppCtx{Ctx: ctx, Cancel: cancel, Cfg: cfg, W: w, Registry: reg, Journal: j}, nil
+	// Journal is opened lazily — read-only commands never touch sqlite.
+	return &AppCtx{Ctx: ctx, Cancel: cancel, Cfg: cfg, W: w, Registry: reg}, nil
+}
+
+// ensureJournal opens the sqlite history DB on first use. Safe to call
+// multiple times; only the first call does any work. Commands that record
+// transactions (install/remove/upgrade/...) or read history must call this
+// before touching app.Journal.
+func (a *AppCtx) ensureJournal() error {
+	if a.Journal != nil {
+		return nil
+	}
+	j, err := journal.Open(journal.DefaultPath())
+	if err != nil {
+		return err
+	}
+	a.Journal = j
+	return nil
+}
+
+// CloseJournal is a defer-safe close; it's a no-op if the journal was never
+// opened.
+func (a *AppCtx) CloseJournal() {
+	if a.Journal != nil {
+		_ = a.Journal.Close()
+	}
 }
 
 // maybeRefreshTaps runs `brew update` when the caller actually needs fresh

@@ -19,7 +19,7 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer app.Journal.Close()
+			defer app.CloseJournal()
 
 			sel := backend.ListInstalled
 			if len(args) == 1 {
