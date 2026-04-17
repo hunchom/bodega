@@ -6,7 +6,6 @@ Usage:
 Available Commands:
   autoremove  Remove orphaned dependencies
   clean       Remove old versions and caches
-  completion  Generate the autocompletion script for the specified shell
   completions Generate shell completion script
   doctor      System and brew health check
   help        Help about any command

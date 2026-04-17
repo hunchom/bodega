@@ -61,8 +61,6 @@ func newUpgradeCmd() *cobra.Command {
 				return err
 			}
 			defer app.Journal.Close()
-			// tap update first
-			_, _ = app.Registry.Primary().Deps(app.Ctx, "") // harmless probe; real update flow below:
 			return runMutate(app, "upgrade", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Upgrade(app.Ctx, names, pw)
 			}, "upgraded")

@@ -30,6 +30,7 @@ func NewRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.CompletionOptions.HiddenDefaultCmd = true
 	root.PersistentFlags().BoolVar(&Flags.JSON, "json", false, "machine-readable output")
 	root.PersistentFlags().BoolVarP(&Flags.Yes, "yes", "y", false, "assume yes on prompts")
 	root.PersistentFlags().BoolVar(&Flags.NoColor, "no-color", false, "disable ANSI colors")
