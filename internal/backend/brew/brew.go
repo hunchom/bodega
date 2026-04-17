@@ -321,7 +321,7 @@ func (b *Brew) ReverseDeps(ctx context.Context, name string) ([]string, error) {
 		return nil, brewErr("uses", name, out)
 	}
 	var names []string
-	for _, l := range strings.Split(string(out.Stdout), "\n") {
+	for l := range strings.SplitSeq(string(out.Stdout), "\n") {
 		l = strings.TrimSpace(l)
 		if l != "" {
 			names = append(names, l)
@@ -350,7 +350,7 @@ func (b *Brew) Taps(ctx context.Context) ([]string, error) {
 		return nil, brewErr("tap", "", out)
 	}
 	var taps []string
-	for _, l := range strings.Split(string(out.Stdout), "\n") {
+	for l := range strings.SplitSeq(string(out.Stdout), "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			taps = append(taps, l)
 		}
@@ -403,7 +403,7 @@ func (b *Brew) Doctor(ctx context.Context) ([]string, error) {
 
 func linesToPkgs(b []byte, src backend.Source) []backend.Package {
 	var pkgs []backend.Package
-	for _, l := range strings.Split(string(b), "\n") {
+	for l := range strings.SplitSeq(string(b), "\n") {
 		l = strings.TrimSpace(l)
 		if l == "" {
 			continue
@@ -497,13 +497,13 @@ var _ = json.Unmarshal // keep the import visible in parse.go callers
 // brew prints) and falls back to a canned message when stderr is empty.
 func brewErr(sub, arg string, r *runner.Result) error {
 	msg := ""
-	for _, l := range strings.Split(string(r.Stderr), "\n") {
+	for l := range strings.SplitSeq(string(r.Stderr), "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			msg = l
 		}
 	}
 	if msg == "" {
-		for _, l := range strings.Split(string(r.Stdout), "\n") {
+		for l := range strings.SplitSeq(string(r.Stdout), "\n") {
 			if l = strings.TrimSpace(l); l != "" {
 				msg = l
 			}

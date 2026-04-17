@@ -42,10 +42,7 @@ func (t Table) Render() string {
 			if i >= cols {
 				break
 			}
-			pad := widths[i] - visualLen(v)
-			if pad < 0 {
-				pad = 0
-			}
+			pad := max(0, widths[i]-visualLen(v))
 			if i < len(t.Aligns) && t.Aligns[i] == AlignRight {
 				b.WriteString(strings.Repeat(" ", pad))
 				if head {
