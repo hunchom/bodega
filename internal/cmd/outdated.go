@@ -19,6 +19,7 @@ func newOutdatedCmd() *cobra.Command {
 				return err
 			}
 			defer app.Journal.Close()
+			maybeRefreshTaps(app)
 
 			pkgs, err := app.Registry.Primary().Outdated(app.Ctx)
 			if err != nil {

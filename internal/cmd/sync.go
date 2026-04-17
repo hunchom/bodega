@@ -17,6 +17,11 @@ func newSyncCmd() *cobra.Command {
 				return err
 			}
 			defer app.Journal.Close()
+			// sync always refreshes: it's an explicit "update everything".
+			if !Flags.NoRefresh {
+				Flags.Refresh = true
+			}
+			maybeRefreshTaps(app)
 			pw := &backend.StreamPW{W: app.W.Out}
 
 			steps := []struct {

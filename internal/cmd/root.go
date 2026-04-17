@@ -5,12 +5,14 @@ import (
 )
 
 type GlobalFlags struct {
-	JSON    bool
-	Yes     bool
-	NoColor bool
-	Debug   bool
-	DryRun  bool
-	Config  string
+	JSON      bool
+	Yes       bool
+	NoColor   bool
+	Debug     bool
+	DryRun    bool
+	Config    string
+	Refresh   bool // --refresh: force tap refresh before this command
+	NoRefresh bool // --no-refresh: skip tap refresh even if stale
 }
 
 var Flags = &GlobalFlags{}
@@ -37,6 +39,8 @@ func NewRoot() *cobra.Command {
 	root.PersistentFlags().BoolVar(&Flags.Debug, "debug", false, "verbose debug output")
 	root.PersistentFlags().BoolVar(&Flags.DryRun, "dry-run", false, "show what would happen")
 	root.PersistentFlags().StringVar(&Flags.Config, "config", "", "override config path")
+	root.PersistentFlags().BoolVar(&Flags.Refresh, "refresh", false, "force brew tap refresh before the command")
+	root.PersistentFlags().BoolVar(&Flags.NoRefresh, "no-refresh", false, "skip brew tap refresh even when stale")
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newListCmd())

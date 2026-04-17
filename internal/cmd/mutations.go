@@ -61,6 +61,7 @@ func newUpgradeCmd() *cobra.Command {
 				return err
 			}
 			defer app.Journal.Close()
+			maybeRefreshTaps(app)
 			return runMutate(app, "upgrade", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Upgrade(app.Ctx, names, pw)
 			}, "upgraded")

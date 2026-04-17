@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/backend/brew"
@@ -51,4 +53,30 @@ func boot() (*AppCtx, error) {
 		cancel()
 	}()
 	return &AppCtx{Ctx: ctx, Cancel: cancel, Cfg: cfg, W: w, Registry: reg, Journal: j}, nil
+}
+
+// maybeRefreshTaps runs `brew update` when the caller actually needs fresh
+// tap state (install/upgrade/outdated/sync). Honors the --refresh and
+// --no-refresh global flags; otherwise gated by the 24h staleness threshold
+// in brew.DefaultStaleAge. Prints a short status line so the user sees why
+// they're waiting when a refresh happens.
+func maybeRefreshTaps(app *AppCtx) {
+	if Flags.NoRefresh {
+		return
+	}
+	if !Flags.Refresh && !brew.Stale(brew.DefaultStaleAge) {
+		return
+	}
+	// Resolve the *brew.Brew from the registry so we can call RefreshTaps.
+	bb, ok := app.Registry.Primary().(*brew.Brew)
+	if !ok {
+		return
+	}
+	app.W.Printf("%s %s\n", theme.Muted.Render("→"), "taps stale — refreshing")
+	start := time.Now()
+	if err := bb.RefreshTaps(app.Ctx, nil); err != nil {
+		app.W.Errorf("%s refresh failed: %v\n", theme.Warn.Render("!"), err)
+		return
+	}
+	app.W.Printf("%s %s\n", theme.OK.Render("✓"), fmt.Sprintf("refreshed (%s)", time.Since(start).Round(100*time.Millisecond)))
 }

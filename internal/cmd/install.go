@@ -26,6 +26,7 @@ func newInstallCmd() *cobra.Command {
 				return err
 			}
 			defer app.Journal.Close()
+			maybeRefreshTaps(app)
 			return runInstall(app, args)
 		},
 	}

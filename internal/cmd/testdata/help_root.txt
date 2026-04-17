@@ -37,6 +37,8 @@ Flags:
   -h, --help            help for yum
       --json            machine-readable output
       --no-color        disable ANSI colors
+      --no-refresh      skip brew tap refresh even when stale
+      --refresh         force brew tap refresh before the command
   -y, --yes             assume yes on prompts
 
 Use "yum [command] --help" for more information about a command.
