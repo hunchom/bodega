@@ -1,0 +1,8 @@
+/yum
+/dist/
+/coverage.out
+.DS_Store
+*.test
+*.prof
+.idea/
+.vscode/
