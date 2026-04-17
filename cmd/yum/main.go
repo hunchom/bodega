@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hunchom/yum/internal/cmd"
-	"github.com/hunchom/yum/internal/ui/theme"
+	"github.com/hunchom/bodega/internal/cmd"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func main() {

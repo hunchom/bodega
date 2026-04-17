@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hunchom/yum/internal/ui/theme"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 // Progress is a single-line bar. Call Update on byte counts; Done to finalize.

@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"github.com/hunchom/yum/internal/ui/theme"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 type Field struct {

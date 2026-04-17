@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/hunchom/yum/internal/backend"
-	"github.com/hunchom/yum/internal/runner"
+	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/runner"
 )
 
 type Brew struct {

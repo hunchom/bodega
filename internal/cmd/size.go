@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hunchom/yum/internal/backend"
-	"github.com/hunchom/yum/internal/ui"
-	"github.com/hunchom/yum/internal/ui/theme"
+	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/ui"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func newSizeCmd() *cobra.Command {

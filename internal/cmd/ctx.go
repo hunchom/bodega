@@ -5,13 +5,13 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/hunchom/yum/internal/backend"
-	"github.com/hunchom/yum/internal/backend/brew"
-	"github.com/hunchom/yum/internal/config"
-	"github.com/hunchom/yum/internal/journal"
-	"github.com/hunchom/yum/internal/runner"
-	"github.com/hunchom/yum/internal/ui"
-	"github.com/hunchom/yum/internal/ui/theme"
+	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/backend/brew"
+	"github.com/hunchom/bodega/internal/config"
+	"github.com/hunchom/bodega/internal/journal"
+	"github.com/hunchom/bodega/internal/runner"
+	"github.com/hunchom/bodega/internal/ui"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 type AppCtx struct {

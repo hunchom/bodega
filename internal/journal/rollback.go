@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hunchom/yum/internal/backend"
+	"github.com/hunchom/bodega/internal/backend"
 )
 
 // Plan returns the steps required to invert a past transaction.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hunchom/yum/internal/backend"
+	"github.com/hunchom/bodega/internal/backend"
 )
 
 func parseInfoV2(b []byte, want string) (*backend.Package, error) {

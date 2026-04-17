@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hunchom/yum/internal/ui/theme"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func TestTableGolden(t *testing.T) {

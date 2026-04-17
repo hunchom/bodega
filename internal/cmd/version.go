@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/hunchom/yum/internal/version"
+	"github.com/hunchom/bodega/internal/version"
 	"github.com/spf13/cobra"
 )
 

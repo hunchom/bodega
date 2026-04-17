@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hunchom/yum/internal/runner"
+	"github.com/hunchom/bodega/internal/runner"
 )
 
 func TestInfoParsesFixture(t *testing.T) {

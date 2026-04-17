@@ -3,8 +3,8 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/hunchom/yum/internal/backend"
-	"github.com/hunchom/yum/internal/ui"
+	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/ui"
 )
 
 func toUI(n *backend.DepTree) *ui.TreeNode {

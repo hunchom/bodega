@@ -3,9 +3,9 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	sv "github.com/hunchom/yum/internal/semver"
-	"github.com/hunchom/yum/internal/ui"
-	"github.com/hunchom/yum/internal/ui/theme"
+	sv "github.com/hunchom/bodega/internal/semver"
+	"github.com/hunchom/bodega/internal/ui"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func newOutdatedCmd() *cobra.Command {
