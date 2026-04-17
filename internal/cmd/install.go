@@ -32,6 +32,10 @@ func newInstallCmd() *cobra.Command {
 
 // runInstall is shared by install and search --install.
 func runInstall(app *AppCtx, names []string) error {
+	if Flags.DryRun {
+		app.W.Printf("%s would install %s\n", theme.Muted.Render("dry-run"), strings.Join(names, " "))
+		return nil
+	}
 	txID, err := app.Journal.Begin(app.Ctx, "install",
 		journal.Cmdline(append([]string{"yum", "install"}, names...)),
 		versionStr(), brewVersion())

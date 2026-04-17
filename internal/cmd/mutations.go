@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -87,6 +88,10 @@ func newAutoremoveCmd() *cobra.Command {
 }
 
 func runMutate(app *AppCtx, verb string, names []string, doer func([]string, backend.ProgressWriter) error, action string) error {
+	if Flags.DryRun {
+		app.W.Printf("%s would %s %s\n", theme.Muted.Render("dry-run"), verb, strings.Join(names, " "))
+		return nil
+	}
 	txID, err := app.Journal.Begin(app.Ctx, verb,
 		journal.Cmdline(append([]string{"yum", verb}, names...)), versionStr(), brewVersion())
 	if err != nil {

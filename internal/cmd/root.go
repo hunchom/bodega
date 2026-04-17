@@ -15,6 +15,13 @@ type GlobalFlags struct {
 
 var Flags = &GlobalFlags{}
 
+type ExitErr struct {
+	Short string
+	Code  int
+}
+
+func (e *ExitErr) Error() string { return e.Short }
+
 func NewRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "yum",
