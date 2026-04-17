@@ -88,6 +88,11 @@ func newAutoremoveCmd() *cobra.Command {
 }
 
 func runMutate(app *AppCtx, verb string, names []string, doer func([]string, backend.ProgressWriter) error, action string) error {
+	for _, n := range names {
+		if strings.TrimSpace(n) == "" {
+			return fmt.Errorf("%s: empty package name", verb)
+		}
+	}
 	if Flags.DryRun {
 		app.W.Printf("%s would %s %s\n", theme.Muted.Render("dry-run"), verb, strings.Join(names, " "))
 		return nil
