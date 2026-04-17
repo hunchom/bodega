@@ -26,10 +26,6 @@ type AppCtx struct {
 }
 
 func boot() (*AppCtx, error) {
-	cfg, err := config.Load(Flags.Config)
-	if err != nil {
-		return nil, err
-	}
 	if Flags.NoColor || os.Getenv("NO_COLOR") != "" {
 		theme.NoColor = true
 		theme.Load()
@@ -47,8 +43,24 @@ func boot() (*AppCtx, error) {
 		<-sig
 		cancel()
 	}()
-	// Journal is opened lazily — read-only commands never touch sqlite.
-	return &AppCtx{Ctx: ctx, Cancel: cancel, Cfg: cfg, W: w, Registry: reg}, nil
+	// Journal and Cfg are both opened lazily — read-only commands never
+	// touch sqlite and don't care about the user's config.toml.
+	return &AppCtx{Ctx: ctx, Cancel: cancel, W: w, Registry: reg}, nil
+}
+
+// ensureCfg loads ~/.config/yum/config.toml on first use. Until then,
+// AppCtx.Cfg is nil. Only mutation paths (install/remove/upgrade) currently
+// read the config; everything else happily works without it.
+func (a *AppCtx) ensureCfg() error {
+	if a.Cfg != nil {
+		return nil
+	}
+	cfg, err := config.Load(Flags.Config)
+	if err != nil {
+		return err
+	}
+	a.Cfg = cfg
+	return nil
 }
 
 // ensureJournal opens the sqlite history DB on first use. Safe to call

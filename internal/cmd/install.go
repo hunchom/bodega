@@ -77,7 +77,8 @@ func runInstall(app *AppCtx, names []string) error {
 			last = err
 			exit = 1
 			app.W.Errorf("%s\n", theme.Err.Render("✗ "+n+": "+err.Error()))
-			if app.Cfg.Defaults.Parallel == false || os.Getenv("YUM_DEBUG") != "" {
+			_ = app.ensureCfg()
+			if app.Cfg == nil || app.Cfg.Defaults.Parallel == false || os.Getenv("YUM_DEBUG") != "" {
 				app.W.Errorf("%s\n", buf.String())
 			}
 			continue

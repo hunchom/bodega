@@ -113,6 +113,7 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 	if err := doer(names, pw); err != nil {
 		exit = 1
 		app.W.Errorf("%s %s\n", theme.Err.Render("✗"), err.Error())
+		_ = app.ensureCfg()
 		if app.Cfg == nil || app.Cfg.Defaults.Parallel == false {
 			app.W.Errorf("%s\n", buf.String())
 		}
