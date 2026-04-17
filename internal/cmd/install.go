@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -100,6 +99,3 @@ func versionOf(app *AppCtx, name string) string {
 	}
 	return p.Version
 }
-
-func _join(s []string) string { return strings.Join(s, ",") }
-func _now() time.Time         { return time.Now() }
