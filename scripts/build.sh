@@ -39,18 +39,20 @@ kv()     { printf "  %s%-12s%s %s\n" "$M" "$1" "$R" "$2"; }
 # ── help ──────────────────────────────────────────────────────────────────────
 show_help() {
   cat <<EOF
-${B}${A}bodega${R} — build, install, uninstall
+${B}${A}bodega${R} — build, install, clean, uninstall
 
 ${B}usage${R}
   ${A}./build.sh${R}                build ${BINARY}; prompt to install
   ${A}./build.sh ${M}-i, --install${R}   build and install, no prompt
   ${A}./build.sh ${M}-n, --no-install${R} build only, skip the prompt
+  ${A}./build.sh ${M}-c, --clean${R}     remove build artifacts, test cache, info cache
   ${A}./build.sh ${M}-u, --uninstall${R} remove installed ${BINARY} + completions
   ${A}./build.sh ${M}-h, --help${R}      show this message
 
 ${B}paths${R}
   ${M}binary     ${R} ${BIN_DIR}/${BINARY}
   ${M}completion ${R} ${COMP_DIR}/_${BINARY}
+  ${M}info cache ${R} \${XDG_CACHE_HOME:-\$HOME/.cache}/yum/info
 
 ${B}env${R}
   ${M}NO_COLOR=1 ${R} disable ANSI output
@@ -104,6 +106,35 @@ do_install() {
   printf "  %sopen a new shell and try:%s ${A}yum --help${R}\n" "$D" "$R"
 }
 
+# ── clean ─────────────────────────────────────────────────────────────────────
+do_clean() {
+  title "clean"
+  cleaned=0
+
+  if [ -e "./${BINARY}" ]; then
+    rm -f "./${BINARY}"; ok "removed ./${BINARY}"; cleaned=1
+  fi
+
+  shopt -s nullglob
+  artifacts=(./${BINARY}-* ./coverage.out ./*.prof ./*.test)
+  shopt -u nullglob
+  for f in "${artifacts[@]}"; do
+    [ -e "$f" ] || continue
+    rm -f "$f"; ok "removed $f"; cleaned=1
+  done
+
+  step "go clean -testcache"
+  go clean -testcache 2>/dev/null && ok "test cache cleared"
+
+  INFO_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/yum/info"
+  if [ -d "$INFO_CACHE" ]; then
+    count=$(find "$INFO_CACHE" -type f | wc -l | tr -d ' ')
+    rm -rf "$INFO_CACHE"; ok "removed info cache (${count} entries)"; cleaned=1
+  fi
+
+  [ "$cleaned" -eq 0 ] && warn "nothing to clean — repo was already tidy"
+}
+
 # ── uninstall ─────────────────────────────────────────────────────────────────
 do_uninstall() {
   title "uninstall"
@@ -140,6 +171,7 @@ case "${1:-}" in
   -h|--help)                    show_help ;;
   -i|--install)                 do_build; do_install ;;
   -n|--no-install|--build-only) do_build ;;
+  -c|--clean)                   do_clean ;;
   -u|--uninstall)               do_uninstall ;;
   "")                           do_build; prompt_install ;;
   *)  err "unknown argument: $1"; echo; show_help; exit 2 ;;
