@@ -116,7 +116,3 @@ func newHistoryUndoCmd() *cobra.Command {
 		},
 	}
 }
-
-// runRollback is implemented in rollback.go (Task 32). Stub here is removed
-// by that task; kept only to satisfy the build between commits.
-func runRollback(_ *AppCtx, _ int64) error { return fmt.Errorf("rollback not yet wired") }

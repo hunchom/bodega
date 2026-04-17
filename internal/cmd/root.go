@@ -49,5 +49,6 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newPinCmd(true))
 	root.AddCommand(newPinCmd(false))
 	root.AddCommand(newHistoryCmd())
+	root.AddCommand(newRollbackCmd())
 	return root
 }
