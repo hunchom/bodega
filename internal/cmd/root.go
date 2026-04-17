@@ -53,5 +53,6 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newManifestCmd())
+	root.AddCommand(newCompletionsCmd(root))
 	return root
 }
