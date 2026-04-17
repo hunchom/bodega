@@ -32,7 +32,8 @@ func newRollbackCmd() *cobra.Command {
 					return err
 				}
 				if len(txs) == 0 {
-					return fmt.Errorf("no transactions to roll back")
+					app.W.Println(theme.Muted.Render("nothing to undo"))
+					return nil
 				}
 				id = txs[0].ID
 			}
@@ -53,6 +54,10 @@ func runRollback(app *AppCtx, id int64) error {
 
 	for _, s := range steps {
 		app.W.Printf("%s %s %s\n", theme.Accent.Render("•"), s.Verb, s.Pkg.Name)
+	}
+	if Flags.DryRun {
+		app.W.Printf("%s rollback preview only\n", theme.Muted.Render("dry-run"))
+		return nil
 	}
 	if !Flags.Yes && !confirm(app.W, "apply rollback?") {
 		return nil
