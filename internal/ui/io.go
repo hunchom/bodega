@@ -27,10 +27,10 @@ func (w *Writer) IsTTY() bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
-func (w *Writer) Println(a ...any)           { fmt.Fprintln(w.Out, a...) }
-func (w *Writer) Printf(f string, a ...any)  { fmt.Fprintf(w.Out, f, a...) }
-func (w *Writer) Errorln(a ...any)           { fmt.Fprintln(w.Err, a...) }
-func (w *Writer) Errorf(f string, a ...any)  { fmt.Fprintf(w.Err, f, a...) }
+func (w *Writer) Println(a ...any)          { fmt.Fprintln(w.Out, a...) }
+func (w *Writer) Printf(f string, a ...any) { fmt.Fprintf(w.Out, f, a...) }
+func (w *Writer) Errorln(a ...any)          { fmt.Fprintln(w.Err, a...) }
+func (w *Writer) Errorf(f string, a ...any) { fmt.Fprintf(w.Err, f, a...) }
 
 func (w *Writer) Print(v any) error {
 	if w.JSON {
