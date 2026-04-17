@@ -1,0 +1,43 @@
+yum — yum/dnf command surface over Homebrew, with rollback, history, and a proper TUI.
+
+Usage:
+  yum [command]
+
+Available Commands:
+  autoremove  Remove orphaned dependencies
+  clean       Remove old versions and caches
+  completion  Generate the autocompletion script for the specified shell
+  completions Generate shell completion script
+  doctor      System and brew health check
+  help        Help about any command
+  history     Transaction history
+  info        Show package info
+  install     Install one or more packages
+  list        List packages
+  manifest    Export/apply a system manifest
+  outdated    List outdated packages
+  pin         pin a package version
+  provides    Find which formula installs a command
+  reinstall   Reinstall packages
+  remove      Remove packages
+  repolist    List active taps
+  rollback    Undo last transaction (or specific id)
+  search      Search across formulae and casks
+  size        Disk usage per installed package
+  sync        update + upgrade + autoremove + cleanup
+  tree        Forward dependency tree
+  unpin       unpin a package version
+  upgrade     Update taps and upgrade packages
+  version     Print version
+  why         Show reverse dependencies (what pulled this in)
+
+Flags:
+      --config string   override config path
+      --debug           verbose debug output
+      --dry-run         show what would happen
+  -h, --help            help for yum
+      --json            machine-readable output
+      --no-color        disable ANSI colors
+  -y, --yes             assume yes on prompts
+
+Use "yum [command] --help" for more information about a command.
