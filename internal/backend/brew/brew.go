@@ -25,6 +25,9 @@ func (b *Brew) Search(ctx context.Context, q string) ([]backend.Package, error) 
 	if err != nil {
 		return nil, err
 	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("search", q, out)
+	}
 	var pkgs []backend.Package
 	sc := bufio.NewScanner(strings.NewReader(string(out.Stdout)))
 	for sc.Scan() {
@@ -47,6 +50,9 @@ func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) 
 	if err != nil {
 		return nil, err
 	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("info", name, out)
+	}
 	return parseInfoV2(out.Stdout, name)
 }
 
@@ -63,11 +69,17 @@ func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Packag
 		if err != nil {
 			return nil, err
 		}
+		if out.ExitCode != 0 {
+			return nil, brewErr("leaves", "", out)
+		}
 		return linesToPkgs(out.Stdout, backend.SrcFormula), nil
 	case backend.ListPinned:
 		out, err := b.R.Run(ctx, "brew", "list", "--pinned")
 		if err != nil {
 			return nil, err
+		}
+		if out.ExitCode != 0 {
+			return nil, brewErr("list --pinned", "", out)
 		}
 		pkgs := linesToPkgs(out.Stdout, backend.SrcFormula)
 		for i := range pkgs {
@@ -79,6 +91,9 @@ func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Packag
 		if err != nil {
 			return nil, err
 		}
+		if out.ExitCode != 0 {
+			return nil, brewErr("formulae", "", out)
+		}
 		return linesToPkgs(out.Stdout, backend.SrcFormula), nil
 	}
 	return nil, fmt.Errorf("unknown list filter: %q", f)
@@ -88,6 +103,9 @@ func (b *Brew) parseListVersions(ctx context.Context, flag string) ([]backend.Pa
 	out, err := b.R.Run(ctx, "brew", "list", flag, "--versions")
 	if err != nil {
 		return nil, err
+	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("list "+flag, "", out)
 	}
 	var pkgs []backend.Package
 	sc := bufio.NewScanner(strings.NewReader(string(out.Stdout)))
@@ -113,6 +131,9 @@ func (b *Brew) Outdated(ctx context.Context) ([]backend.Package, error) {
 	if err != nil {
 		return nil, err
 	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("outdated", "", out)
+	}
 	return parseOutdatedV2(out.Stdout)
 }
 
@@ -121,6 +142,9 @@ func (b *Brew) Deps(ctx context.Context, name string) (*backend.DepTree, error) 
 	if err != nil {
 		return nil, err
 	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("deps", name, out)
+	}
 	return parseDepsTree(out.Stdout, name), nil
 }
 
@@ -128,6 +152,9 @@ func (b *Brew) ReverseDeps(ctx context.Context, name string) ([]string, error) {
 	out, err := b.R.Run(ctx, "brew", "uses", "--installed", name)
 	if err != nil {
 		return nil, err
+	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("uses", name, out)
 	}
 	var names []string
 	for _, l := range strings.Split(string(out.Stdout), "\n") {
@@ -144,6 +171,9 @@ func (b *Brew) Provides(ctx context.Context, cmd string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("which-formula", cmd, out)
+	}
 	return strings.Fields(string(out.Stdout)), nil
 }
 
@@ -151,6 +181,9 @@ func (b *Brew) Taps(ctx context.Context) ([]string, error) {
 	out, err := b.R.Run(ctx, "brew", "tap")
 	if err != nil {
 		return nil, err
+	}
+	if out.ExitCode != 0 {
+		return nil, brewErr("tap", "", out)
 	}
 	var taps []string
 	for _, l := range strings.Split(string(out.Stdout), "\n") {
@@ -166,8 +199,14 @@ func (b *Brew) Pin(ctx context.Context, name string, pin bool) error {
 	if !pin {
 		cmd = "unpin"
 	}
-	_, err := b.R.Run(ctx, "brew", cmd, name)
-	return err
+	out, err := b.R.Run(ctx, "brew", cmd, name)
+	if err != nil {
+		return err
+	}
+	if out.ExitCode != 0 {
+		return brewErr(cmd, name, out)
+	}
+	return nil
 }
 
 func (b *Brew) Cleanup(ctx context.Context, deep bool) error {
@@ -175,8 +214,14 @@ func (b *Brew) Cleanup(ctx context.Context, deep bool) error {
 	if deep {
 		args = append(args, "--prune=all")
 	}
-	_, err := b.R.Run(ctx, "brew", args...)
-	return err
+	out, err := b.R.Run(ctx, "brew", args...)
+	if err != nil {
+		return err
+	}
+	if out.ExitCode != 0 {
+		return brewErr("cleanup", "", out)
+	}
+	return nil
 }
 
 func (b *Brew) Doctor(ctx context.Context) ([]string, error) {
@@ -266,3 +311,32 @@ type infoV2 struct {
 }
 
 var _ = json.Unmarshal // keep the import visible in parse.go callers
+
+// brewErr turns a non-zero brew invocation into a user-facing error. It prefers
+// the last non-empty stderr line (which is usually the "Error: ..." message
+// brew prints) and falls back to a canned message when stderr is empty.
+func brewErr(sub, arg string, r *runner.Result) error {
+	msg := ""
+	for _, l := range strings.Split(string(r.Stderr), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			msg = l
+		}
+	}
+	if msg == "" {
+		for _, l := range strings.Split(string(r.Stdout), "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				msg = l
+			}
+		}
+	}
+	if arg != "" {
+		if msg == "" {
+			return fmt.Errorf("brew %s %s: exit %d", sub, arg, r.ExitCode)
+		}
+		return fmt.Errorf("brew %s %s: %s", sub, arg, msg)
+	}
+	if msg == "" {
+		return fmt.Errorf("brew %s: exit %d", sub, r.ExitCode)
+	}
+	return fmt.Errorf("brew %s: %s", sub, msg)
+}

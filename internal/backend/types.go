@@ -14,19 +14,19 @@ const (
 )
 
 type Package struct {
-	Name        string    `json:"name"`
-	Version     string    `json:"version,omitempty"`
-	Latest      string    `json:"latest,omitempty"`
-	Source      Source    `json:"source"`
-	Tap         string    `json:"tap,omitempty"`
-	Desc        string    `json:"desc,omitempty"`
-	Homepage    string    `json:"homepage,omitempty"`
-	License     string    `json:"license,omitempty"`
-	Size        int64     `json:"size,omitempty"`
-	InstalledOn time.Time `json:"installed_on,omitempty"`
-	Pinned      bool      `json:"pinned,omitempty"`
-	Deps        []string  `json:"deps,omitempty"`
-	BuildDeps   []string  `json:"build_deps,omitempty"`
+	Name        string     `json:"name"`
+	Version     string     `json:"version,omitempty"`
+	Latest      string     `json:"latest,omitempty"`
+	Source      Source     `json:"source"`
+	Tap         string     `json:"tap,omitempty"`
+	Desc        string     `json:"desc,omitempty"`
+	Homepage    string     `json:"homepage,omitempty"`
+	License     string     `json:"license,omitempty"`
+	Size        int64      `json:"size,omitempty"`
+	InstalledOn *time.Time `json:"installed_on,omitempty"`
+	Pinned      bool       `json:"pinned,omitempty"`
+	Deps        []string   `json:"deps,omitempty"`
+	BuildDeps   []string   `json:"build_deps,omitempty"`
 }
 
 type ListFilter string

@@ -24,7 +24,8 @@ func parseInfoV2(b []byte, want string) (*backend.Package, error) {
 		}
 		if len(f.Installed) > 0 {
 			p.Version = f.Installed[0].Version
-			p.InstalledOn = time.Unix(f.Installed[0].Time, 0)
+			t := time.Unix(f.Installed[0].Time, 0)
+			p.InstalledOn = &t
 		}
 		return p, nil
 	}
