@@ -10,10 +10,18 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/runner"
 )
+
+// infoCacheTTL bounds the freshness of cached `brew info --json=v2` payloads.
+// Five minutes is short enough that a user who just ran `brew update` will
+// see the new data on their next interactive lookup, but long enough that
+// repeated info calls within a single session (e.g. batch scripts) hit the
+// disk cache instead of paying the 200-600ms Ruby reload each time.
+const infoCacheTTL = 5 * time.Minute
 
 type Brew struct {
 	R runner.Runner
@@ -76,6 +84,12 @@ func (b *Brew) Search(ctx context.Context, q string) ([]backend.Package, error) 
 }
 
 func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) {
+	if data, ok := readCache(name, infoCacheTTL); ok {
+		if p, err := parseInfoV2(data, name); err == nil {
+			return p, nil
+		}
+		// Parse failed on cached data — treat it as a miss and re-fetch.
+	}
 	out, err := b.R.Run(ctx, "brew", "info", "--json=v2", name)
 	if err != nil {
 		return nil, err
@@ -83,7 +97,12 @@ func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) 
 	if out.ExitCode != 0 {
 		return nil, brewErr("info", name, out)
 	}
-	return parseInfoV2(out.Stdout, name)
+	p, err := parseInfoV2(out.Stdout, name)
+	if err != nil {
+		return nil, err
+	}
+	_ = writeCache(name, out.Stdout)
+	return p, nil
 }
 
 func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Package, error) {
@@ -410,16 +429,32 @@ func (b *Brew) stream(ctx context.Context, w backend.ProgressWriter, args ...str
 }
 
 func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWriter) error {
-	return b.stream(ctx, w, append([]string{"install"}, names...)...)
+	if err := b.stream(ctx, w, append([]string{"install"}, names...)...); err != nil {
+		return err
+	}
+	invalidateCache(names)
+	return nil
 }
 func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWriter) error {
-	return b.stream(ctx, w, append([]string{"uninstall"}, names...)...)
+	if err := b.stream(ctx, w, append([]string{"uninstall"}, names...)...); err != nil {
+		return err
+	}
+	invalidateCache(names)
+	return nil
 }
 func (b *Brew) Reinstall(ctx context.Context, names []string, w backend.ProgressWriter) error {
-	return b.stream(ctx, w, append([]string{"reinstall"}, names...)...)
+	if err := b.stream(ctx, w, append([]string{"reinstall"}, names...)...); err != nil {
+		return err
+	}
+	invalidateCache(names)
+	return nil
 }
 func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWriter) error {
-	return b.stream(ctx, w, append([]string{"upgrade"}, names...)...)
+	if err := b.stream(ctx, w, append([]string{"upgrade"}, names...)...); err != nil {
+		return err
+	}
+	invalidateCache(names)
+	return nil
 }
 func (b *Brew) Autoremove(ctx context.Context, w backend.ProgressWriter) error {
 	return b.stream(ctx, w, "autoremove")

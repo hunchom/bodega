@@ -9,6 +9,11 @@ import (
 )
 
 func TestInfoParsesFixture(t *testing.T) {
+	// Isolate the info cache so we never read/write the user's real
+	// ~/.cache/yum/info directory during tests.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	resetCacheDirForTest()
+
 	data, err := os.ReadFile("testdata/info-ripgrep.json")
 	if err != nil {
 		t.Fatal(err)
