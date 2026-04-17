@@ -31,5 +31,6 @@ func NewRoot() *cobra.Command {
 	root.PersistentFlags().StringVar(&Flags.Config, "config", "", "override config path")
 
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newListCmd())
 	return root
 }
