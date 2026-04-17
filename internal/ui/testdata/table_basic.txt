@@ -1,0 +1,3 @@
+[1mname[0m     [1mver[0m     [1msize[0m
+ripgrep  14.1.0  5 MB
+jq       1.7.1   1 MB
