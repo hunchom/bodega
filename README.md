@@ -27,10 +27,12 @@ Homebrew is fine underneath. Its surface is not. Commands are inconsistent acros
 ```sh
 git clone https://github.com/hunchom/bodega ~/bodega
 cd ~/bodega
-./scripts/install.sh
+./build.sh --install
 ```
 
-The installer:
+`./build.sh` is the one script that handles everything. With no arguments it builds and asks if you want to install; `--install` skips the prompt, `--no-install` just builds, `--uninstall` removes it, `--help` prints the menu.
+
+The install step:
 
 - builds the binary with `go build` (no CGO, no Xcode CLT required)
 - drops it at `~/.local/bin/yum`
@@ -116,10 +118,11 @@ up = "upgrade"
 ## Development
 
 ```sh
-./scripts/build.sh         # compile ./yum in place
+./build.sh --no-install    # compile ./yum in place
 go test ./...              # run the unit tests
 ./yum <command>            # run without installing
-./scripts/install.sh       # install to ~/.local/bin
+./build.sh --install       # install to ~/.local/bin
+./build.sh --help          # full script reference
 ```
 
 The source tree is small on purpose:

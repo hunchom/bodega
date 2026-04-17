@@ -18,7 +18,7 @@ First public release.
 - `--yes` / `-y`, `--no-color`, `--debug`, `--dry-run`, `--config` global flags.
 - Interactive fuzzy picker for `search -i` (bubbletea list).
 - Semver-diff color coding on `outdated` — major = red, minor = amber, patch = green.
-- CLT-free install via `./scripts/install.sh` (pure Go build; no Xcode command-line tools required).
+- CLT-free install via `./build.sh --install` (pure Go build; no Xcode command-line tools required). The same script handles build, install, uninstall, and help.
 - Shell completions for zsh, bash, fish, powershell.
 - Golden-file tests for table, panel, tree, and root help output.
 
