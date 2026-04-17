@@ -51,5 +51,6 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newHistoryCmd())
 	root.AddCommand(newRollbackCmd())
 	root.AddCommand(newSyncCmd())
+	root.AddCommand(newDoctorCmd())
 	return root
 }
