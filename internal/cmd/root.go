@@ -43,5 +43,10 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newTreeCmd())
 	root.AddCommand(newWhyCmd())
 	root.AddCommand(newSizeCmd())
+	root.AddCommand(newProvidesCmd())
+	root.AddCommand(newRepolistCmd())
+	root.AddCommand(newCleanCmd())
+	root.AddCommand(newPinCmd(true))
+	root.AddCommand(newPinCmd(false))
 	return root
 }
