@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
@@ -37,7 +38,8 @@ func newManifestCmd() *cobra.Command {
 			pins, _ := app.Registry.Primary().List(app.Ctx, backend.ListPinned)
 
 			m := Manifest{
-				Taps: taps,
+				Generated: time.Now().UTC().Format(time.RFC3339),
+				Taps:      taps,
 			}
 			for _, p := range form {
 				m.Formulae = append(m.Formulae, p.Name)
