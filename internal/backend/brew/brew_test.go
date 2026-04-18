@@ -13,6 +13,11 @@ func TestInfoParsesFixture(t *testing.T) {
 	// ~/.cache/yum/info directory during tests.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	resetCacheDirForTest()
+	// Force the subprocess path — we're exercising the parser, not the
+	// brew-API fast path (which would happily find ripgrep on a real mac
+	// and short-circuit the fake runner).
+	apiCacheDisabled = true
+	t.Cleanup(func() { apiCacheDisabled = false })
 
 	data, err := os.ReadFile("testdata/info-ripgrep.json")
 	if err != nil {

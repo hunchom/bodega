@@ -41,6 +41,24 @@ var (
 	disablePrefixCache bool // tests only — bypasses Cellar fast path
 )
 
+// sharedAPICache is a process-wide APICache. Because the formula/cask maps
+// are tens of megabytes we want exactly one copy per run; every Brew
+// instance shares it. apiCacheDisabled is a test hook that forces callers
+// past the API cache and into the subprocess path.
+var (
+	sharedAPICacheOnce sync.Once
+	sharedAPICache     *APICache
+	apiCacheDisabled   bool // tests only — bypasses API cache fast path
+)
+
+func apiCache() *APICache {
+	if apiCacheDisabled {
+		return nil
+	}
+	sharedAPICacheOnce.Do(func() { sharedAPICache = NewAPICache() })
+	return sharedAPICache
+}
+
 func brewPrefix() string {
 	if disablePrefixCache {
 		return ""
@@ -84,12 +102,26 @@ func (b *Brew) Search(ctx context.Context, q string) ([]backend.Package, error) 
 }
 
 func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) {
+	// 1) Our own disk cache of prior `brew info --json=v2` responses. This is
+	// the tightest hit path — sub-millisecond on warm disk — because the
+	// cached payload already carries installed metadata.
 	if data, ok := readCache(name, infoCacheTTL); ok {
 		if p, err := parseInfoV2(data, name); err == nil {
 			return p, nil
 		}
 		// Parse failed on cached data — treat it as a miss and re-fetch.
 	}
+	// 2) brew's own API cache. No subprocess, no network; one mmap-ish
+	// read of ~/Library/Caches/Homebrew/api/*.jws.json and a map lookup.
+	// We overlay installed version metadata by scanning the Cellar so the
+	// user sees the version they actually have, not just the latest stable.
+	if ac := apiCache(); ac != nil {
+		if p, err := ac.Lookup(name); err == nil && p != nil {
+			overlayInstalled(p)
+			return p, nil
+		}
+	}
+	// 3) Last resort — ask brew itself.
 	out, err := b.R.Run(ctx, "brew", "info", "--json=v2", name)
 	if err != nil {
 		return nil, err
@@ -103,6 +135,40 @@ func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) 
 	}
 	_ = writeCache(name, out.Stdout)
 	return p, nil
+}
+
+// overlayInstalled fills in p.Version / p.InstalledOn from the filesystem
+// when the package is actually installed. For formulae we look at
+// /<prefix>/Cellar/<name>/<ver>; for casks, /<prefix>/Caskroom/<name>/<ver>.
+// If nothing is installed we leave the stable version in place so `yum info`
+// still displays something useful.
+func overlayInstalled(p *backend.Package) {
+	if p == nil {
+		return
+	}
+	prefix := brewPrefix()
+	if prefix == "" {
+		return
+	}
+	var dir string
+	switch p.Source {
+	case backend.SrcFormula:
+		dir = prefix + "/Cellar/" + p.Name
+	case backend.SrcCask:
+		dir = prefix + "/Caskroom/" + p.Name
+	default:
+		return
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		return
+	}
+	if v := latestVersionDir(dir); v != "" {
+		p.Version = v
+	}
+	if mt := st.ModTime(); !mt.IsZero() {
+		p.InstalledOn = &mt
+	}
 }
 
 func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Package, error) {
