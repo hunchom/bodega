@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func newProvidesCmd() *cobra.Command {
@@ -50,9 +53,30 @@ func newRepolistCmd() *cobra.Command {
 			if app.W.JSON {
 				return app.W.Print(taps)
 			}
+
+			// Width of the divider: the widest of the header word "tap" or
+			// any tap name, clamped to at least the sample width used in the
+			// spec (30) so single-tap machines don't get a stubby line.
+			w := len("tap")
 			for _, t := range taps {
-				app.W.Println(t)
+				if n := len(t); n > w {
+					w = n
+				}
 			}
+			if w < 30 {
+				w = 30
+			}
+			app.W.Printf(" %s\n", theme.Header.Render("tap"))
+			app.W.Printf(" %s\n", theme.Muted.Render(strings.Repeat("─", w)))
+			for _, t := range taps {
+				app.W.Printf(" %s\n", t)
+			}
+			app.W.Println()
+			noun := "taps"
+			if len(taps) == 1 {
+				noun = "tap"
+			}
+			app.W.Printf(" %s\n", theme.Muted.Render(fmt.Sprintf("%d %s", len(taps), noun)))
 			return nil
 		},
 	}
