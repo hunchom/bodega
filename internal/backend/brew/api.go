@@ -26,8 +26,32 @@ type APIFormula struct {
 	Versions struct {
 		Stable string `json:"stable"`
 	} `json:"versions"`
-	Dependencies      []string `json:"dependencies"`
-	BuildDependencies []string `json:"build_dependencies"`
+	Dependencies      []string  `json:"dependencies"`
+	BuildDependencies []string  `json:"build_dependencies"`
+	Bottle            APIBottle `json:"bottle"`
+}
+
+// APIBottle is the bottle section of a formula payload. The stable channel is
+// the only one we care about for native installs; head-built bottles aren't
+// published to the core tap's GHCR.
+type APIBottle struct {
+	Stable APIBottleChannel `json:"stable"`
+}
+
+// APIBottleChannel carries the rebuild counter plus the per-tag file map.
+// root_url is irrelevant because each file entry is a fully-qualified URL.
+type APIBottleChannel struct {
+	Rebuild int                      `json:"rebuild"`
+	RootURL string                   `json:"root_url"`
+	Files   map[string]APIBottleFile `json:"files"`
+}
+
+// APIBottleFile is one per-tag bottle entry. The URL is absolute and the
+// sha256 is the lowercase hex digest of the tarball payload.
+type APIBottleFile struct {
+	Cellar string `json:"cellar"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
 }
 
 // APICask mirrors the subset of brew's cask.jws.json payload fields we need.
@@ -69,6 +93,25 @@ func NewAPICache() *APICache {
 	return &APICache{root: filepath.Join(home, "Library", "Caches", "Homebrew", "api")}
 }
 
+// newAPICacheFromMaps builds an APICache pre-populated with the given
+// formula/cask maps, bypassing all disk I/O. It's intended for tests that
+// want to exercise Lookup / Resolve against synthetic fixtures without
+// having to spin up a temp JWS file. The returned cache's root is empty so
+// any reload attempt will fail; both maps are treated as fresh on first
+// access because their mtime matches the zero time.
+func newAPICacheFromMaps(formulae map[string]*APIFormula, casks map[string]*APICask) *APICache {
+	c := &APICache{}
+	if formulae == nil {
+		formulae = map[string]*APIFormula{}
+	}
+	if casks == nil {
+		casks = map[string]*APICask{}
+	}
+	c.formulae = formulae
+	c.casks = casks
+	return c
+}
+
 // jwsEnvelope is the outer shape of a *.jws.json file. We only care about the
 // payload; the protected header and signature are irrelevant for local reads.
 type jwsEnvelope struct {
@@ -105,7 +148,19 @@ func unwrapJWS(raw []byte) ([]byte, error) {
 // return a non-nil error and leave the cached map nil so subsequent calls
 // re-attempt rather than stick on a stale failure.
 func (c *APICache) LoadFormulae() (map[string]*APIFormula, error) {
-	if c == nil || c.root == "" {
+	if c == nil {
+		return nil, fmt.Errorf("brew api cache unavailable")
+	}
+	// Fast path: a test or caller may have pre-populated the map via
+	// newAPICacheFromMaps. In that case we honour it and skip the disk read
+	// entirely — there's no backing file to stat.
+	if c.root == "" {
+		c.muF.Lock()
+		m := c.formulae
+		c.muF.Unlock()
+		if m != nil {
+			return m, nil
+		}
 		return nil, fmt.Errorf("brew api cache unavailable")
 	}
 	path := filepath.Join(c.root, "formula.jws.json")
