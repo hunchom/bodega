@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -508,6 +509,26 @@ func (b *Brew) stream(ctx context.Context, w backend.ProgressWriter, args ...str
 }
 
 func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWriter) error {
+	// Try native bottle install first. It's ~5-10× faster than `brew install`
+	// because we skip Ruby startup, fetch deps in parallel, and avoid
+	// reparsing the formula DB. ErrNativeUnsupported means the host can't
+	// run the native path (no Homebrew prefix, cold API cache) — fall back
+	// to the subprocess silently. Any other error is a real failure.
+	_, err := b.InstallNative(ctx, names, InstallOpts{
+		Progress: func(ev InstallEvent) {
+			if w == nil || ev.Message == "" {
+				return
+			}
+			fmt.Fprintln(w, ev.Message)
+		},
+	})
+	if err == nil {
+		invalidateCache(names)
+		return nil
+	}
+	if !errors.Is(err, ErrNativeUnsupported) {
+		return err
+	}
 	if err := b.stream(ctx, w, append([]string{"install"}, names...)...); err != nil {
 		return err
 	}
