@@ -76,6 +76,19 @@ func brewPrefix() string {
 
 func (b *Brew) Name() string { return "brew" }
 
+// SearchNative walks brew's JWS cache in-process and returns matches by
+// substring. It's a strict subset of what `brew search` does (no fuzzy
+// matching, no descriptions-only flag), but on the hot path it replaces a
+// 500ms subprocess with a 50-150ms map scan. Returns (nil, err) when the
+// API cache is unavailable so the caller can fall back to Search.
+func (b *Brew) SearchNative(ctx context.Context, q string) ([]backend.Package, error) {
+	ac := apiCache()
+	if ac == nil {
+		return nil, fmt.Errorf("brew api cache disabled")
+	}
+	return ac.SearchNames(q)
+}
+
 func (b *Brew) Search(ctx context.Context, q string) ([]backend.Package, error) {
 	out, err := b.R.Run(ctx, "brew", "search", q)
 	if err != nil {
