@@ -79,11 +79,111 @@ func newAutoremoveCmd() *cobra.Command {
 				return err
 			}
 			defer app.CloseJournal()
-			return runMutate(app, "autoremove", nil, func(_ []string, pw backend.ProgressWriter) error {
-				return app.Registry.Primary().Autoremove(app.Ctx, pw)
-			}, "removed")
+			if Flags.DryRun {
+				app.W.Printf("%s would autoremove orphaned deps\n", theme.Muted.Render("dry-run"))
+				return nil
+			}
+			if err := app.ensureJournal(); err != nil {
+				return err
+			}
+			txID, err := app.Journal.Begin(app.Ctx, "autoremove",
+				journal.Cmdline([]string{"yum", "autoremove"}), versionStr(), brewVersion())
+			if err != nil {
+				return err
+			}
+
+			app.W.Printf("%s %s\n", theme.Muted.Render("→"), "scanning for orphaned dependencies")
+			var buf bytes.Buffer
+			pw := &backend.StreamPW{W: &buf}
+			runErr := app.Registry.Primary().Autoremove(app.Ctx, pw)
+
+			if runErr != nil {
+				app.W.Errorf("%s %s\n", theme.Err.Render("✗"), runErr.Error())
+				app.W.Errorf("%s\n", buf.String())
+				_ = app.Journal.End(app.Ctx, txID, 1, nil)
+				return fmt.Errorf("autoremove: failed")
+			}
+
+			removed := parseUninstalled(buf.Bytes())
+			var txPkgs []journal.TxPackage
+			for _, n := range removed {
+				txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "formula", Action: "removed"})
+			}
+			if err := app.Journal.End(app.Ctx, txID, 0, txPkgs); err != nil {
+				return err
+			}
+
+			switch len(removed) {
+			case 0:
+				app.W.Printf("%s %s\n", theme.OK.Render("✓"), "nothing to remove")
+			default:
+				app.W.Printf("%s %s %d %s: %s\n",
+					theme.OK.Render("✓"),
+					"removed",
+					len(removed),
+					pluralize("package", len(removed)),
+					strings.Join(removed, ", "),
+				)
+			}
+			return nil
 		},
 	}
+}
+
+// parseUninstalled scans brew stdout for lines like
+// "Uninstalling /opt/homebrew/Cellar/<name>/<version>..." and returns the
+// set of formula names in the order they appeared. If we can't pull any
+// names out, callers fall back to a plain "✓ done".
+func parseUninstalled(b []byte) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		idx := strings.Index(line, "Uninstalling ")
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+len("Uninstalling "):])
+		// Forms we tolerate:
+		//   Uninstalling /opt/homebrew/Cellar/foo/1.2.3...
+		//   Uninstalling foo... (1 files, 1KB)
+		// Strip a trailing "..." and any parenthetical suffix.
+		if i := strings.Index(rest, "("); i >= 0 {
+			rest = strings.TrimSpace(rest[:i])
+		}
+		rest = strings.TrimSuffix(rest, "...")
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			continue
+		}
+		var name string
+		if strings.Contains(rest, "/Cellar/") {
+			// Path form: .../Cellar/<name>/<version>
+			segs := strings.Split(rest, "/")
+			for i := 0; i < len(segs)-1; i++ {
+				if segs[i] == "Cellar" {
+					name = segs[i+1]
+					break
+				}
+			}
+		} else {
+			// Bare-name form.
+			name = strings.Fields(rest)[0]
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
+}
+
+func pluralize(word string, n int) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 func runMutate(app *AppCtx, verb string, names []string, doer func([]string, backend.ProgressWriter) error, action string) error {
