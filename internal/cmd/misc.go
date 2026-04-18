@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hunchom/bodega/internal/backend/brew"
 	"github.com/hunchom/bodega/internal/ui"
 	"github.com/hunchom/bodega/internal/ui/theme"
 )
@@ -181,9 +182,75 @@ func newCleanCmd() *cobra.Command {
 			}
 			defer app.CloseJournal()
 			deep := len(args) == 1 && args[0] == "all"
-			return app.Registry.Primary().Cleanup(app.Ctx, deep)
+
+			// Show intent up-front so the user sees something happen.
+			what := "clearing old versions and caches"
+			if deep {
+				what = "clearing all caches"
+			}
+			app.W.Printf("%s %s\n", theme.Muted.Render("→"), what)
+
+			// Reach into the brew backend's runner so we can scrape the
+			// freed-bytes summary brew prints. Falls back to the plain
+			// Cleanup() call if the primary isn't a *brew.Brew (e.g. a
+			// test double).
+			if bb, ok := app.Registry.Primary().(*brew.Brew); ok {
+				cleanArgs := []string{"cleanup"}
+				if deep {
+					cleanArgs = append(cleanArgs, "--prune=all")
+				}
+				out, err := bb.R.Run(app.Ctx, "brew", cleanArgs...)
+				if err != nil {
+					return err
+				}
+				if out.ExitCode != 0 {
+					// Mirror brew's last-error-line convention.
+					msg := strings.TrimSpace(string(out.Stderr))
+					if msg == "" {
+						msg = strings.TrimSpace(string(out.Stdout))
+					}
+					if msg == "" {
+						msg = fmt.Sprintf("brew cleanup: exit %d", out.ExitCode)
+					}
+					return fmt.Errorf("%s", msg)
+				}
+				if freed := parseFreedSize(out.Stdout); freed != "" {
+					app.W.Printf("%s freed %s\n", theme.OK.Render("✓"), freed)
+					return nil
+				}
+				app.W.Printf("%s done\n", theme.OK.Render("✓"))
+				return nil
+			}
+			if err := app.Registry.Primary().Cleanup(app.Ctx, deep); err != nil {
+				return err
+			}
+			app.W.Printf("%s done\n", theme.OK.Render("✓"))
+			return nil
 		},
 	}
+}
+
+// parseFreedSize looks for brew's summary line
+// "==> This operation has freed approximately 142.5MB of disk space."
+// and returns the size phrase ("142.5MB"). Returns "" if no summary was
+// found, which signals callers to fall back to a plain "done".
+func parseFreedSize(b []byte) string {
+	const marker = "has freed approximately "
+	for _, line := range strings.Split(string(b), "\n") {
+		idx := strings.Index(line, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+len(marker):])
+		// rest looks like "142.5MB of disk space." — take everything up
+		// to the first space so we keep the size token verbatim.
+		if sp := strings.IndexByte(rest, ' '); sp > 0 {
+			rest = rest[:sp]
+		}
+		rest = strings.TrimRight(rest, ".")
+		return rest
+	}
+	return ""
 }
 
 func newPinCmd(pin bool) *cobra.Command {

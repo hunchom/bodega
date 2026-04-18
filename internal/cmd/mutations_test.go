@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestParseFreedSize(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"==> This operation has freed approximately 142.5MB of disk space.\n", "142.5MB"},
+		{"random chatter\n==> This operation has freed approximately 1.2GB of disk space.\n", "1.2GB"},
+		{"nothing interesting here\n", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := parseFreedSize([]byte(tc.in))
+		if got != tc.want {
+			t.Errorf("parseFreedSize(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestParseUninstalled(t *testing.T) {
 	cases := []struct {
 		name string
