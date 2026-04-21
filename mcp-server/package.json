@@ -1,0 +1,31 @@
+{
+  "name": "@bodega/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server exposing bodega's yum CLI as native tools, resources, and prompts for Claude Code.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "bodega-mcp": "dist/src/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/index.js",
+    "test": "npm run build && node --test dist/test/tools.test.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

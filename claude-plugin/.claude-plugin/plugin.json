@@ -13,5 +13,12 @@
     "homebrew",
     "macos",
     "yum"
-  ]
+  ],
+  "mcpServers": {
+    "bodega": {
+      "type": "stdio",
+      "command": "bodega-mcp",
+      "args": []
+    }
+  }
 }
