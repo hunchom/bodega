@@ -56,6 +56,8 @@ func runInstall(app *AppCtx, names []string) error {
 	var txPkgs []journal.TxPackage
 	exit := 0
 	var last error
+	var installed []string
+	failed := []map[string]string{}
 
 	for _, n := range names {
 		// Resolve source for journaling.
@@ -66,7 +68,7 @@ func runInstall(app *AppCtx, names []string) error {
 		}
 		_ = rerr
 
-		if app.W.IsTTY() {
+		if app.W.IsTTY() && !app.W.JSON {
 			app.W.Printf("%s %s %s\n", theme.Muted.Render("→"), theme.Muted.Render("installing"), theme.Bold.Render(n))
 		}
 
@@ -76,21 +78,36 @@ func runInstall(app *AppCtx, names []string) error {
 		if err != nil {
 			last = err
 			exit = 1
-			app.W.Errorf("%s %s: %s\n", theme.Err.Render("✗"), n, err.Error())
-			_ = app.ensureCfg()
-			if app.Cfg == nil || !app.Cfg.Defaults.Parallel || os.Getenv("YUM_DEBUG") != "" {
-				app.W.Errorf("%s\n", buf.String())
+			failed = append(failed, map[string]string{"package": n, "error": err.Error()})
+			if !app.W.JSON {
+				app.W.Errorf("%s %s: %s\n", theme.Err.Render("✗"), n, err.Error())
+				_ = app.ensureCfg()
+				if app.Cfg == nil || !app.Cfg.Defaults.Parallel || os.Getenv("YUM_DEBUG") != "" {
+					app.W.Errorf("%s\n", buf.String())
+				}
 			}
 			continue
 		}
 		txPkgs = append(txPkgs, journal.TxPackage{
 			Name: n, ToVersion: versionOf(app, n), Source: src, Action: "installed",
 		})
-		app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
+		installed = append(installed, n)
+		if !app.W.JSON {
+			app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
+		}
 	}
 
 	if err := app.Journal.End(app.Ctx, txID, exit, txPkgs); err != nil {
 		return err
+	}
+	if app.W.JSON {
+		if installed == nil {
+			installed = []string{}
+		}
+		_ = app.W.Print(map[string]any{
+			"installed": installed,
+			"failed":    failed,
+		})
 	}
 	if last != nil {
 		return fmt.Errorf("install: one or more packages failed")

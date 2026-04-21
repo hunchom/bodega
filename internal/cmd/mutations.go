@@ -209,25 +209,48 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 	exit := 0
 	var buf bytes.Buffer
 	pw := &backend.StreamPW{W: &buf}
+	var failed []map[string]string
+	var runErr error
 
 	if err := doer(names, pw); err != nil {
 		exit = 1
-		app.W.Errorf("%s %s\n", theme.Err.Render("✗"), err.Error())
-		_ = app.ensureCfg()
-		if app.Cfg == nil || !app.Cfg.Defaults.Parallel {
-			app.W.Errorf("%s\n", buf.String())
+		runErr = err
+		if !app.W.JSON {
+			app.W.Errorf("%s %s\n", theme.Err.Render("✗"), err.Error())
+			_ = app.ensureCfg()
+			if app.Cfg == nil || !app.Cfg.Defaults.Parallel {
+				app.W.Errorf("%s\n", buf.String())
+			}
+		}
+		for _, n := range names {
+			failed = append(failed, map[string]string{"package": n, "error": err.Error()})
 		}
 	} else {
 		for _, n := range names {
 			txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "formula", Action: action})
-			app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
+			if !app.W.JSON {
+				app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
+			}
 		}
 	}
 	if err := app.Journal.End(app.Ctx, txID, exit, txPkgs); err != nil {
 		return err
 	}
+	if app.W.JSON {
+		succeeded := []string{}
+		if exit == 0 {
+			succeeded = names
+		}
+		if failed == nil {
+			failed = []map[string]string{}
+		}
+		_ = app.W.Print(map[string]any{
+			action:   succeeded,
+			"failed": failed,
+		})
+	}
 	if exit != 0 {
-		return fmt.Errorf("%s: failed", verb)
+		return fmt.Errorf("%s: %v", verb, runErr)
 	}
 	return nil
 }

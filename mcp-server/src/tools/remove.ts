@@ -9,12 +9,6 @@ const inputSchema = {
     .array(z.string().min(1))
     .min(1)
     .describe("Package names to uninstall."),
-  force: z
-    .boolean()
-    .optional()
-    .describe(
-      "Remove even if other packages depend on it. Dangerous - use only when the user explicitly requests force.",
-    ),
 };
 
 interface RemoveResponse {
@@ -37,13 +31,9 @@ export function registerRemove(server: McpServer, runner: Runner): void {
         openWorldHint: true,
       },
     },
-    async ({ packages, force }) =>
+    async ({ packages }) =>
       safeHandler(
-        () => {
-          const args = ["remove", "-y"];
-          if (force) args.push("--force");
-          return runYumJSON<RemoveResponse>(runner, [...args, ...packages]);
-        },
+        () => runYumJSON<RemoveResponse>(runner, ["remove", "-y", ...packages]),
         (payload) =>
           jsonResult({
             removed: payload?.removed ?? packages,
