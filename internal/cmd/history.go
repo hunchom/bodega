@@ -11,6 +11,7 @@ import (
 )
 
 func newHistoryCmd() *cobra.Command {
+	var limit int
 	c := &cobra.Command{
 		Use:   "history",
 		Short: "Transaction history",
@@ -23,7 +24,11 @@ func newHistoryCmd() *cobra.Command {
 			if err := app.ensureJournal(); err != nil {
 				return err
 			}
-			txs, err := app.Journal.Recent(app.Ctx, 50)
+			n := limit
+			if n <= 0 {
+				n = 50
+			}
+			txs, err := app.Journal.Recent(app.Ctx, n)
 			if err != nil {
 				return err
 			}
@@ -55,6 +60,7 @@ func newHistoryCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().IntVar(&limit, "limit", 0, "cap the number of transactions shown (0 = default 50)")
 	c.AddCommand(newHistoryInfoCmd())
 	c.AddCommand(newHistoryUndoCmd())
 	return c
