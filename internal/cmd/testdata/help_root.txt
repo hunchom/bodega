@@ -30,6 +30,7 @@ Available Commands:
   tree        Forward dependency tree
   unpin       unpin a package version
   upgrade     Update taps and upgrade packages
+  verify      Deep integrity check of the install tree
   version     Print version
   why         Show reverse dependencies (what pulled this in)
 

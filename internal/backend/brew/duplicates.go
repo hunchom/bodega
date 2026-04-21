@@ -19,6 +19,12 @@ func Prefix() string {
 	return brewPrefix()
 }
 
+// SharedAPICache exposes the process-wide API cache to callers outside this
+// package (e.g. internal/verify) that want to resolve formula metadata
+// without going through Brew's full Info path. Returns nil when tests have
+// disabled it.
+func SharedAPICache() *APICache { return apiCache() }
+
 // findDuplicatesPrefix lets tests point FindDuplicates/PruneDuplicate at a
 // fake prefix under t.TempDir() without touching the real filesystem. Empty
 // in production.
