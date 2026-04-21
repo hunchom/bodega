@@ -13,6 +13,7 @@ Available Commands:
   info        Show package info
   install     Install one or more packages
   list        List packages
+  log         Show per-package event history
   manifest    Export/apply a system manifest
   outdated    List outdated packages
   pin         pin a package version
