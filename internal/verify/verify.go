@@ -10,8 +10,23 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
+
 	"github.com/hunchom/bodega/internal/backend/brew"
 )
+
+// olderVersion returns true when a is semantically older than b. Homebrew
+// versions aren't always clean semver (e.g. "3.0.0_1") so we fall back to
+// a byte-wise compare when parsing fails, which mirrors how the rest of
+// the codebase degrades on non-semver revisions.
+func olderVersion(a, b string) bool {
+	va, err1 := semver.NewVersion(a)
+	vb, err2 := semver.NewVersion(b)
+	if err1 == nil && err2 == nil {
+		return va.LessThan(vb)
+	}
+	return a < b
+}
 
 // IssueKind enumerates the distinct problem categories `yum verify` reports.
 // Values are stable strings so they survive JSON round-trips and can be
@@ -247,7 +262,7 @@ func checkOrphaned(prefix string) []Issue {
 				})
 				continue
 			}
-			if v < linkedVer {
+			if olderVersion(v, linkedVer) {
 				out = append(out, Issue{
 					Kind:    KindOrphaned,
 					Package: name,

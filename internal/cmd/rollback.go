@@ -62,7 +62,7 @@ func runRollback(app *AppCtx, id int64) error {
 		app.W.Printf("%s rollback preview only\n", theme.Muted.Render("dry-run"))
 		return nil
 	}
-	if !Flags.Yes && !confirm(app.W, "apply rollback?") {
+	if !Flags.Yes && !confirm("apply rollback?") {
 		return nil
 	}
 
@@ -89,10 +89,9 @@ func runRollback(app *AppCtx, id int64) error {
 	return nil
 }
 
-func confirm(w interface{ Printf(string, ...any) }, prompt string) bool {
-	// Replaced with huh in next task; shim for now.
+func confirm(prompt string) bool {
 	fmt.Printf("%s [y/N] ", prompt)
 	var a string
-	fmt.Scanln(&a)
+	_, _ = fmt.Scanln(&a)
 	return a == "y" || a == "Y" || a == "yes"
 }

@@ -450,6 +450,7 @@ func (b *Brew) Pin(ctx context.Context, name string, pin bool) error {
 	if out.ExitCode != 0 {
 		return brewErr(cmd, name, out)
 	}
+	invalidateCache([]string{name})
 	return nil
 }
 
@@ -465,6 +466,7 @@ func (b *Brew) Cleanup(ctx context.Context, deep bool) error {
 	if out.ExitCode != 0 {
 		return brewErr("cleanup", "", out)
 	}
+	clearCache()
 	return nil
 }
 
@@ -577,7 +579,11 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	return nil
 }
 func (b *Brew) Autoremove(ctx context.Context, w backend.ProgressWriter) error {
-	return b.stream(ctx, w, "autoremove")
+	if err := b.stream(ctx, w, "autoremove"); err != nil {
+		return err
+	}
+	clearCache()
+	return nil
 }
 
 // Helper JSON types (narrow — ignore fields we don't use).

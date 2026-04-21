@@ -94,7 +94,7 @@ func (a *AppCtx) CloseJournal() {
 // they're waiting when a refresh happens — suppressed under --json so
 // scripted callers never get a surprise line of human chatter.
 func maybeRefreshTaps(app *AppCtx) {
-	if Flags.NoRefresh {
+	if Flags.NoRefresh || Flags.DryRun {
 		return
 	}
 	if !Flags.Refresh && !brew.Stale(brew.DefaultStaleAge) {

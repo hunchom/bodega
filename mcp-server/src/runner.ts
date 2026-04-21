@@ -86,18 +86,3 @@ export async function runYumJSON<T>(
   }
 }
 
-/**
- * Run `yum` without --json - for commands that don't yet support structured
- * output. Returns raw stdout trimmed.
- */
-export async function runYumText(
-  runner: Runner,
-  args: string[],
-): Promise<string> {
-  const { stdout, stderr, exitCode } = await runner.run(args);
-  if (exitCode !== 0) {
-    const msg = (stderr || stdout).trim() || `exit code ${exitCode}`;
-    throw new Error(`yum ${args.join(" ")} failed: ${msg}`);
-  }
-  return stdout.trim();
-}

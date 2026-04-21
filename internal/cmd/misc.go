@@ -247,12 +247,12 @@ func newCleanCmd() *cobra.Command {
 // found, which signals callers to fall back to a plain "done".
 func parseFreedSize(b []byte) string {
 	const marker = "has freed approximately "
-	for _, line := range strings.Split(string(b), "\n") {
-		idx := strings.Index(line, marker)
-		if idx < 0 {
+	for line := range strings.SplitSeq(string(b), "\n") {
+		_, rest, ok := strings.Cut(line, marker)
+		if !ok {
 			continue
 		}
-		rest := strings.TrimSpace(line[idx+len(marker):])
+		rest = strings.TrimSpace(rest)
 		// rest looks like "142.5MB of disk space." — take everything up
 		// to the first space so we keep the size token verbatim.
 		if sp := strings.IndexByte(rest, ' '); sp > 0 {

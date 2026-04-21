@@ -117,6 +117,24 @@ func invalidateCache(names []string) {
 	}
 }
 
+// clearCache wipes every cached `brew info` payload. Used after mutations
+// that can affect an unknown set of packages (autoremove, cleanup) where
+// we'd otherwise have to scrape brew stdout just to figure out what to
+// invalidate. Cheap: the cache is a few hundred small files.
+func clearCache() {
+	dir := cacheDir()
+	if dir == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
 // resetCacheDirForTest forces the next cacheDir() call to re-resolve the
 // directory. Tests use it after t.Setenv("XDG_CACHE_HOME", ...) to pick up
 // the override instead of a previously memoized path.

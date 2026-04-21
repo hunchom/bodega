@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/journal"
 	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
@@ -88,21 +89,45 @@ func newManifestCmd() *cobra.Command {
 				return nil
 			}
 
+			if err := app.ensureJournal(); err != nil {
+				return err
+			}
+			txID, err := app.Journal.Begin(app.Ctx, "manifest-apply",
+				journal.Cmdline([]string{"yum", "manifest", "apply", args[0]}),
+				versionStr(), brewVersion())
+			if err != nil {
+				return err
+			}
+			var txPkgs []journal.TxPackage
+
 			pw := &backend.StreamPW{W: app.W.Out}
 			if len(m.Formulae) > 0 {
 				app.W.Printf("%s installing %d formulae\n", theme.Muted.Render("→"), len(m.Formulae))
 				if err := app.Registry.Primary().Install(app.Ctx, m.Formulae, pw); err != nil {
+					_ = app.Journal.End(app.Ctx, txID, 1, txPkgs)
 					return err
+				}
+				for _, n := range m.Formulae {
+					txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "formula", Action: "installed"})
 				}
 			}
 			if len(m.Casks) > 0 {
 				app.W.Printf("%s installing %d casks\n", theme.Muted.Render("→"), len(m.Casks))
 				if err := app.Registry.Primary().Install(app.Ctx, m.Casks, pw); err != nil {
+					_ = app.Journal.End(app.Ctx, txID, 1, txPkgs)
 					return err
+				}
+				for _, n := range m.Casks {
+					txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "cask", Action: "installed"})
 				}
 			}
 			for _, p := range m.Pinned {
-				_ = app.Registry.Primary().Pin(app.Ctx, p, true)
+				if err := app.Registry.Primary().Pin(app.Ctx, p, true); err == nil {
+					txPkgs = append(txPkgs, journal.TxPackage{Name: p, Source: "formula", Action: "pinned"})
+				}
+			}
+			if err := app.Journal.End(app.Ctx, txID, 0, txPkgs); err != nil {
+				return err
 			}
 			app.W.Printf("%s %s\n", theme.OK.Render("✓"), "manifest applied")
 			return nil

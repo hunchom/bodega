@@ -137,13 +137,13 @@ func newAutoremoveCmd() *cobra.Command {
 func parseUninstalled(b []byte) []string {
 	var names []string
 	seen := map[string]bool{}
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		line = strings.TrimSpace(line)
-		idx := strings.Index(line, "Uninstalling ")
-		if idx < 0 {
+		_, rest, ok := strings.Cut(line, "Uninstalling ")
+		if !ok {
 			continue
 		}
-		rest := strings.TrimSpace(line[idx+len("Uninstalling "):])
+		rest = strings.TrimSpace(rest)
 		// Forms we tolerate:
 		//   Uninstalling /opt/homebrew/Cellar/foo/1.2.3...
 		//   Uninstalling foo... (1 files, 1KB)

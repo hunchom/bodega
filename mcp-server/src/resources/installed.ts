@@ -45,27 +45,14 @@ export function registerInstalledResources(
     },
   );
 
+  // Don't enumerate per-package resources in the `list` callback — on a
+  // typical machine that emits 200-300 entries into every resources/list
+  // response. Clients that want a package can read the template URI
+  // directly via `yum://installed/{name}`; `yum://installed` already
+  // gives them the enumeration cheaply as a single resource read.
   server.registerResource(
     "installed-detail",
-    new ResourceTemplate("yum://installed/{name}", {
-      list: async () => {
-        const packages = await runYumJSON<InstalledPkg[]>(runner, [
-          "list",
-          "installed",
-        ]);
-        return {
-          resources: (packages ?? [])
-            .filter((p): p is InstalledPkg & { name: string } =>
-              typeof p?.name === "string",
-            )
-            .map((p) => ({
-              uri: `yum://installed/${encodeURIComponent(p.name)}`,
-              name: p.name,
-              mimeType: "application/json",
-            })),
-        };
-      },
-    }),
+    new ResourceTemplate("yum://installed/{name}", { list: undefined }),
     {
       title: "Installed package detail",
       description:

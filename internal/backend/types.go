@@ -10,7 +10,6 @@ type Source string
 const (
 	SrcFormula Source = "formula"
 	SrcCask    Source = "cask"
-	SrcMas     Source = "mas"
 )
 
 type Package struct {

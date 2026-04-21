@@ -48,25 +48,18 @@ func newSizeCmd() *cobra.Command {
 			// Parallel walk: dirSize is almost pure stat-bound I/O, so we
 			// saturate GOMAXPROCS workers easily. On an M-series with ~200
 			// formulae this drops from ~1.4s serial to ~150-200ms.
-			workers := runtime.GOMAXPROCS(0)
-			if workers > len(targets) {
-				workers = len(targets)
-			}
-			if workers < 1 {
-				workers = 1
-			}
+			workers := min(runtime.GOMAXPROCS(0), len(targets))
+			workers = max(workers, 1)
 
 			jobs := make(chan backend.Package, len(targets))
 			results := make(chan row, len(targets))
 			var wg sync.WaitGroup
-			for i := 0; i < workers; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+			for range workers {
+				wg.Go(func() {
 					for p := range jobs {
 						results <- row{name: p.Name, size: dirSize(filepath.Join(prefix, p.Name))}
 					}
-				}()
+				})
 			}
 			for _, p := range targets {
 				jobs <- p
