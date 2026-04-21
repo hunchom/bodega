@@ -24,6 +24,7 @@ Available Commands:
   repolist    List active taps
   rollback    Undo last transaction (or specific id)
   search      Search across formulae and casks
+  services    Manage brew-installed launchd services
   size        Disk usage per installed package
   sync        update + upgrade + autoremove + cleanup
   tree        Forward dependency tree
