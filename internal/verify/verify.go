@@ -7,7 +7,6 @@ package verify
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -114,85 +113,14 @@ func installedFormulae(prefix string) ([]string, map[string]bool) {
 	return names, set
 }
 
-// depsRe pulls the "foo" out of `depends_on "foo"` while skipping
-// build-time-only deps (the `=> :build` and `=> :test` variants). Homebrew
-// uses other arrow targets too (`:recommended`, `:optional`); those *are*
-// runtime unless explicitly excluded at install time, so we keep them.
-var depsRe = regexp.MustCompile(`(?m)^\s*depends_on\s+"([^"]+)"(?:\s*=>\s*(:[a-z]+|\[[^\]]+\]))?`)
-
-// onLinuxRe matches a full `on_linux do ... end` block, non-greedy, so we
-// can drop deps gated to other OSes before running depsRe. We intentionally
-// only strip Linux-only blocks because bodega targets macOS; on a Linux
-// host you'd want the reverse (drop `on_macos do`), but the current
-// codebase has no Linux build path.
-var onLinuxRe = regexp.MustCompile(`(?s)\bon_linux\s+do\b.*?\n\s*end\b`)
-
-// readLocalDeps parses $prefix/Cellar/<name>/<ver>/.brew/<name>.rb for
-// runtime depends_on directives. Returns (nil, false) if the file doesn't
-// exist so the caller can fall back to the API resolver. Parsing a formula
-// Ruby file with a regex is obviously not a full Ruby parse — it's good
-// enough for the stable declarative subset Homebrew actually uses.
+// readLocalDeps is a thin shim over brew.ParseRuntimeDeps that preserves the
+// historical (deps, found) tuple shape expected by checkMissingDeps.
 func readLocalDeps(prefix, name string) ([]string, bool) {
-	cellar := filepath.Join(prefix, "Cellar", name)
-	versions, err := os.ReadDir(cellar)
-	if err != nil {
+	deps, found, err := brew.ParseRuntimeDeps(prefix, name)
+	if err != nil || !found {
 		return nil, false
 	}
-	var best string
-	for _, v := range versions {
-		n := v.Name()
-		if !v.IsDir() || strings.HasPrefix(n, ".") {
-			continue
-		}
-		if n > best {
-			best = n
-		}
-	}
-	if best == "" {
-		return nil, false
-	}
-	rb := filepath.Join(cellar, best, ".brew", name+".rb")
-	data, err := os.ReadFile(rb)
-	if err != nil {
-		return nil, false
-	}
-	// Strip on_linux blocks so deps gated to Linux don't produce phantom
-	// "missing" reports on macOS.
-	cleaned := onLinuxRe.ReplaceAllString(string(data), "")
-	var out []string
-	for _, m := range depsRe.FindAllStringSubmatch(cleaned, -1) {
-		if isNonRuntimeArrow(m[2]) {
-			continue
-		}
-		out = append(out, m[1])
-	}
-	return out, true
-}
-
-// isNonRuntimeArrow returns true when the `=> ...` suffix on a depends_on
-// line marks the dep as build- or test-only. Accepts bare symbols
-// (`:build`) and array forms (`[:build, :test]`). A dep tagged as both
-// build AND test but nothing else is not needed at runtime; a dep tagged
-// build + runtime (unusual but legal) still counts as runtime.
-func isNonRuntimeArrow(arrow string) bool {
-	arrow = strings.TrimSpace(arrow)
-	if arrow == "" {
-		return false
-	}
-	if arrow == ":build" || arrow == ":test" {
-		return true
-	}
-	if strings.HasPrefix(arrow, "[") && strings.HasSuffix(arrow, "]") {
-		inner := strings.TrimSuffix(strings.TrimPrefix(arrow, "["), "]")
-		for _, tok := range strings.Split(inner, ",") {
-			tok = strings.TrimSpace(tok)
-			if tok != ":build" && tok != ":test" {
-				return false
-			}
-		}
-		return true
-	}
-	return false
+	return deps, true
 }
 
 func checkMissingDeps(prefix string, resolver DepResolver) []Issue {

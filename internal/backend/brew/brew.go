@@ -536,6 +536,26 @@ func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWr
 	return nil
 }
 func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWriter) error {
+	// Native uninstall first — same fast-path pattern as Install. No
+	// subprocess, no Ruby boot, 10-100ms vs brew's ~2s for a single
+	// formula. ErrNativeUnsupported means "not a standard Homebrew
+	// layout" — degrade to the subprocess silently. Any other error is
+	// a real failure and must be surfaced.
+	_, err := b.UninstallNative(ctx, names, UninstallOpts{
+		Progress: func(ev UninstallEvent) {
+			if w == nil || ev.Message == "" {
+				return
+			}
+			fmt.Fprintln(w, ev.Message)
+		},
+	})
+	if err == nil {
+		invalidateCache(names)
+		return nil
+	}
+	if !errors.Is(err, ErrNativeUnsupported) {
+		return err
+	}
 	if err := b.stream(ctx, w, append([]string{"uninstall"}, names...)...); err != nil {
 		return err
 	}
