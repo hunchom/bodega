@@ -26,6 +26,10 @@ var (
 	Header   lipgloss.Style
 	Border   lipgloss.Border
 	BorderFG lipgloss.Color
+
+	// Version-rendering styles, aligned with the browse TUI palette.
+	installedVer lipgloss.Style
+	latestVer    lipgloss.Style
 )
 
 func init() { Load() }
@@ -53,4 +57,17 @@ func Load() {
 		MiddleTop: "┬", MiddleBottom: "┴",
 	}
 	BorderFG = colBorder
+
+	// Matches the browse TUI: amber for the version that's actually
+	// installed on disk, dim-grey for an upstream version that isn't.
+	installedVer = mk(colAccent)
+	latestVer = mk(colMuted)
 }
+
+// InstalledVersion renders a version string in the installed-package color
+// (amber). Use this anywhere a package's on-disk version is shown.
+func InstalledVersion(s string) string { return installedVer.Render(s) }
+
+// LatestVersion renders an available-but-not-installed version in the
+// muted/dim palette. Pairs with InstalledVersion in listings that mix both.
+func LatestVersion(s string) string { return latestVer.Render(s) }

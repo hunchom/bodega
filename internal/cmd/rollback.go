@@ -56,7 +56,7 @@ func runRollback(app *AppCtx, id int64) error {
 	}
 
 	for _, s := range steps {
-		app.W.Printf("%s %s %s\n", theme.Accent.Render("•"), s.Verb, s.Pkg.Name)
+		app.W.Printf("%s %s %s\n", theme.Muted.Render("→"), s.Verb, s.Pkg.Name)
 	}
 	if Flags.DryRun {
 		app.W.Printf("%s rollback preview only\n", theme.Muted.Render("dry-run"))
@@ -75,7 +75,7 @@ func runRollback(app *AppCtx, id int64) error {
 		case "install":
 			err = app.Registry.Primary().Install(app.Ctx, []string{s.Pkg.Name}, pw)
 		case "downgrade":
-			app.W.Errorf("%s cannot downgrade %s (brew does not retain old tarballs)\n", theme.Warn.Render("!"), s.Pkg.Name)
+			app.W.Errorf("%s cannot downgrade %s (brew does not retain old tarballs)\n", theme.Warn.Render("•"), s.Pkg.Name)
 			continue
 		case "pin":
 			err = app.Registry.Primary().Pin(app.Ctx, s.Pkg.Name, true)

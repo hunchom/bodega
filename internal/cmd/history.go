@@ -95,9 +95,22 @@ func newHistoryInfoCmd() *cobra.Command {
 				},
 			}
 			app.W.Printf("%s", p.Render())
-			for _, pk := range tx.Packages {
-				app.W.Printf("  %s %-25s %s → %s\n", pk.Action, pk.Name, emptyDash(pk.FromVersion), emptyDash(pk.ToVersion))
+			if len(tx.Packages) == 0 {
+				app.W.Println(theme.Muted.Render("no package changes recorded"))
+				return nil
 			}
+			rows := make([][]string, 0, len(tx.Packages))
+			for _, pk := range tx.Packages {
+				rows = append(rows, []string{
+					colorAction(pk.Action),
+					pk.Name,
+					fmt.Sprintf("%s → %s", emptyDash(pk.FromVersion), emptyDash(pk.ToVersion)),
+				})
+			}
+			app.W.Printf("%s", (ui.Table{
+				Headers: []string{"action", "name", "from → to"},
+				Rows:    rows,
+			}).Render())
 			return nil
 		},
 	}

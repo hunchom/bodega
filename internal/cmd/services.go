@@ -63,7 +63,7 @@ func runServicesList(_ *cobra.Command, _ []string) error {
 	}
 
 	if len(svcs) == 0 {
-		app.W.Println(theme.Muted.Render("no services"))
+		app.W.Println(theme.Muted.Render("no services yet"))
 		return nil
 	}
 

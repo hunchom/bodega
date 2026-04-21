@@ -214,7 +214,7 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 		exit = 1
 		app.W.Errorf("%s %s\n", theme.Err.Render("✗"), err.Error())
 		_ = app.ensureCfg()
-		if app.Cfg == nil || app.Cfg.Defaults.Parallel == false {
+		if app.Cfg == nil || !app.Cfg.Defaults.Parallel {
 			app.W.Errorf("%s\n", buf.String())
 		}
 	} else {

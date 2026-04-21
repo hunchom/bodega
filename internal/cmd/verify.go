@@ -90,7 +90,7 @@ func renderReport(app *AppCtx, rep *verify.Report) {
 	}
 
 	if rep.Passed {
-		app.W.Println(theme.OK.Render("✓ all good"))
+		app.W.Printf("%s %s\n", theme.OK.Render("✓"), "all good")
 		return
 	}
 

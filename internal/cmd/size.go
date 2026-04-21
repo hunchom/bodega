@@ -91,6 +91,11 @@ func newSizeCmd() *cobra.Command {
 				return app.W.Print(map[string]any{"packages": out, "total_bytes": total})
 			}
 
+			if len(rows) == 0 {
+				app.W.Println(theme.Muted.Render("no packages installed"))
+				return nil
+			}
+
 			max := int64(1)
 			for _, r := range rows {
 				if r.size > max {

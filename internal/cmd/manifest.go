@@ -81,6 +81,13 @@ func newManifestCmd() *cobra.Command {
 				return err
 			}
 
+			if Flags.DryRun {
+				app.W.Printf("%s would install %d formulae, %d casks; pin %d\n",
+					theme.Muted.Render("dry-run"),
+					len(m.Formulae), len(m.Casks), len(m.Pinned))
+				return nil
+			}
+
 			pw := &backend.StreamPW{W: app.W.Out}
 			if len(m.Formulae) > 0 {
 				app.W.Printf("%s installing %d formulae\n", theme.Muted.Render("→"), len(m.Formulae))
@@ -97,6 +104,7 @@ func newManifestCmd() *cobra.Command {
 			for _, p := range m.Pinned {
 				_ = app.Registry.Primary().Pin(app.Ctx, p, true)
 			}
+			app.W.Printf("%s %s\n", theme.OK.Render("✓"), "manifest applied")
 			return nil
 		},
 	})

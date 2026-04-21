@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hunchom/bodega/internal/ui"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func newInfoCmd() *cobra.Command {
@@ -32,16 +33,35 @@ func newInfoCmd() *cobra.Command {
 				return app.W.Print(pkg)
 			}
 
+			// Version color follows the browse TUI: amber when the
+			// package is actually installed on disk, dim when we're
+			// just echoing upstream's latest. InstalledOn is the
+			// best signal we have for "on disk right now".
+			verStr := pkg.Version
+			switch {
+			case verStr == "":
+				verStr = "-"
+			case pkg.InstalledOn != nil:
+				verStr = theme.InstalledVersion(verStr)
+			default:
+				verStr = theme.LatestVersion(verStr)
+			}
+
+			deps := emptyDash(strings.Join(pkg.Deps, ", "))
+			if len(pkg.Deps) > 0 {
+				deps = theme.Muted.Render(strings.Join(pkg.Deps, ", "))
+			}
+
 			p := ui.Panel{
 				Title: pkg.Name,
 				Fields: []ui.Field{
-					{Key: "version", Value: pkg.Version},
+					{Key: "version", Value: verStr},
 					{Key: "source", Value: string(pkg.Source)},
 					{Key: "tap", Value: emptyDash(pkg.Tap)},
 					{Key: "desc", Value: pkg.Desc},
 					{Key: "homepage", Value: pkg.Homepage},
 					{Key: "license", Value: emptyDash(pkg.License)},
-					{Key: "deps", Value: emptyDash(strings.Join(pkg.Deps, ", "))},
+					{Key: "deps", Value: deps},
 					{Key: "pinned", Value: fmt.Sprintf("%v", pkg.Pinned)},
 				},
 			}

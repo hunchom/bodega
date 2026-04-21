@@ -7,6 +7,7 @@ import (
 
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/ui"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func newListCmd() *cobra.Command {
@@ -43,21 +44,28 @@ func newListCmd() *cobra.Command {
 				return app.W.Print(pkgs)
 			}
 
+			if len(pkgs) == 0 {
+				app.W.Println(theme.Muted.Render("no packages yet"))
+				return nil
+			}
+
 			rows := make([][]string, 0, len(pkgs))
 			for _, p := range pkgs {
 				ver := p.Version
 				if ver == "" {
 					ver = "-"
+				} else {
+					ver = theme.InstalledVersion(ver)
 				}
 				rows = append(rows, []string{p.Name, ver, string(p.Source)})
 			}
 			tbl := ui.Table{
 				Headers: []string{"name", "ver", "src"},
-				Aligns:  []ui.Align{ui.AlignLeft, ui.AlignLeft, ui.AlignLeft},
+				Aligns:  []ui.Align{ui.AlignLeft, ui.AlignRight, ui.AlignLeft},
 				Rows:    rows,
 			}
 			app.W.Printf("%s", tbl.Render())
-			app.W.Printf("%s\n", dim(strconv.Itoa(len(pkgs))+" packages"))
+			app.W.Printf("%s\n", theme.Muted.Render(strconv.Itoa(len(pkgs))+" packages"))
 			return nil
 		},
 	}
@@ -68,5 +76,3 @@ func errUnknownSelector(s string) error { return &selErr{sel: s} }
 type selErr struct{ sel string }
 
 func (e *selErr) Error() string { return "unknown list selector: " + e.sel }
-
-func dim(s string) string { return s } // placeholder for theme.Muted if we want it here

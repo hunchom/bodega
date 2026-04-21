@@ -29,12 +29,15 @@ func newOutdatedCmd() *cobra.Command {
 				return app.W.Print(pkgs)
 			}
 			if len(pkgs) == 0 {
-				app.W.Println(theme.OK.Render("everything up to date"))
+				app.W.Println(theme.OK.Render("✓") + " everything up to date")
 				return nil
 			}
 
 			rows := make([][]string, 0, len(pkgs))
 			for _, p := range pkgs {
+				// Arrow color encodes severity: red=major, yellow=minor,
+				// green=patch. Keeps the semver-diff glance that the
+				// outdated command was built around.
 				arrow := " → "
 				switch sv.Diff(p.Version, p.Latest) {
 				case sv.Major:
@@ -44,7 +47,8 @@ func newOutdatedCmd() *cobra.Command {
 				case sv.Patch:
 					arrow = " " + theme.OK.Render("→") + " "
 				}
-				rows = append(rows, []string{p.Name, p.Version + arrow + p.Latest, string(p.Source)})
+				change := theme.InstalledVersion(p.Version) + arrow + theme.LatestVersion(p.Latest)
+				rows = append(rows, []string{p.Name, change, string(p.Source)})
 			}
 			tbl := ui.Table{
 				Headers: []string{"name", "change", "src"},

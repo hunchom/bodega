@@ -142,6 +142,11 @@ func newRepolistCmd() *cobra.Command {
 				return app.W.Print(taps)
 			}
 
+			if len(taps) == 0 {
+				app.W.Println(theme.Muted.Render("no taps yet"))
+				return nil
+			}
+
 			// Width of the divider: the widest of the header word "tap" or
 			// any tap name, clamped to at least the sample width used in the
 			// spec (30) so single-tap machines don't get a stubby line.
@@ -184,11 +189,17 @@ func newCleanCmd() *cobra.Command {
 			deep := len(args) == 1 && args[0] == "all"
 
 			// Show intent up-front so the user sees something happen.
-			what := "clearing old versions and caches"
+			// Two wordings: the infinitive form for the dry-run prefix,
+			// the gerund for the live progress line.
+			verb, gerund := "clear old versions and caches", "clearing old versions and caches"
 			if deep {
-				what = "clearing all caches"
+				verb, gerund = "clear all caches", "clearing all caches"
 			}
-			app.W.Printf("%s %s\n", theme.Muted.Render("→"), what)
+			if Flags.DryRun {
+				app.W.Printf("%s would %s\n", theme.Muted.Render("dry-run"), verb)
+				return nil
+			}
+			app.W.Printf("%s %s\n", theme.Muted.Render("→"), gerund)
 
 			// Reach into the brew backend's runner so we can scrape the
 			// freed-bytes summary brew prints. Falls back to the plain
@@ -268,7 +279,15 @@ func newPinCmd(pin bool) *cobra.Command {
 				return err
 			}
 			defer app.CloseJournal()
-			return app.Registry.Primary().Pin(app.Ctx, args[0], pin)
+			if Flags.DryRun {
+				app.W.Printf("%s would %s %s\n", theme.Muted.Render("dry-run"), use, args[0])
+				return nil
+			}
+			if err := app.Registry.Primary().Pin(app.Ctx, args[0], pin); err != nil {
+				return err
+			}
+			app.W.Printf("%s %s %s\n", theme.OK.Render("✓"), use+"ned", args[0])
+			return nil
 		},
 	}
 }

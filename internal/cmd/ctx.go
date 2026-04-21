@@ -91,7 +91,8 @@ func (a *AppCtx) CloseJournal() {
 // tap state (install/upgrade/outdated/sync). Honors the --refresh and
 // --no-refresh global flags; otherwise gated by the 24h staleness threshold
 // in brew.DefaultStaleAge. Prints a short status line so the user sees why
-// they're waiting when a refresh happens.
+// they're waiting when a refresh happens — suppressed under --json so
+// scripted callers never get a surprise line of human chatter.
 func maybeRefreshTaps(app *AppCtx) {
 	if Flags.NoRefresh {
 		return
@@ -104,11 +105,17 @@ func maybeRefreshTaps(app *AppCtx) {
 	if !ok {
 		return
 	}
-	app.W.Printf("%s %s\n", theme.Muted.Render("→"), "taps stale — refreshing")
+	if !app.W.JSON {
+		app.W.Printf("%s %s\n", theme.Muted.Render("→"), "taps stale — refreshing")
+	}
 	start := time.Now()
 	if err := bb.RefreshTaps(app.Ctx, nil); err != nil {
-		app.W.Errorf("%s refresh failed: %v\n", theme.Warn.Render("!"), err)
+		if !app.W.JSON {
+			app.W.Errorf("%s refresh failed: %v\n", theme.Warn.Render("•"), err)
+		}
 		return
 	}
-	app.W.Printf("%s %s\n", theme.OK.Render("✓"), fmt.Sprintf("refreshed (%s)", time.Since(start).Round(100*time.Millisecond)))
+	if !app.W.JSON {
+		app.W.Printf("%s %s\n", theme.OK.Render("✓"), fmt.Sprintf("refreshed (%s)", time.Since(start).Round(100*time.Millisecond)))
+	}
 }

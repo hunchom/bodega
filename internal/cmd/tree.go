@@ -5,6 +5,7 @@ import (
 
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/ui"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 func toUI(n *backend.DepTree) *ui.TreeNode {
@@ -37,6 +38,10 @@ func newTreeCmd() *cobra.Command {
 			if app.W.JSON {
 				return app.W.Print(t)
 			}
+			if t == nil || (t.Name == "" && len(t.Children) == 0) {
+				app.W.Println(theme.Muted.Render("no dependencies"))
+				return nil
+			}
 			app.W.Printf("%s", ui.RenderTree(toUI(t)))
 			return nil
 		},
@@ -60,6 +65,10 @@ func newWhyCmd() *cobra.Command {
 			}
 			if app.W.JSON {
 				return app.W.Print(rdeps)
+			}
+			if len(rdeps) == 0 {
+				app.W.Println(theme.Muted.Render("nothing depends on " + args[0]))
+				return nil
 			}
 			root := &ui.TreeNode{Label: args[0]}
 			for _, n := range rdeps {

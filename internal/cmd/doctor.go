@@ -48,7 +48,7 @@ func newDoctorCmd() *cobra.Command {
 				return app.W.Print(warns)
 			}
 			if len(warns) == 0 {
-				app.W.Println(theme.OK.Render("✓ system healthy"))
+				app.W.Printf("%s %s\n", theme.OK.Render("✓"), "system healthy")
 				return nil
 			}
 			for _, w := range warns {

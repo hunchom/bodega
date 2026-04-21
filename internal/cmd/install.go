@@ -67,7 +67,7 @@ func runInstall(app *AppCtx, names []string) error {
 		_ = rerr
 
 		if app.W.IsTTY() {
-			app.W.Printf("%s %s\n", theme.Muted.Render("installing"), theme.Bold.Render(n))
+			app.W.Printf("%s %s %s\n", theme.Muted.Render("→"), theme.Muted.Render("installing"), theme.Bold.Render(n))
 		}
 
 		var buf bytes.Buffer
@@ -76,9 +76,9 @@ func runInstall(app *AppCtx, names []string) error {
 		if err != nil {
 			last = err
 			exit = 1
-			app.W.Errorf("%s\n", theme.Err.Render("✗ "+n+": "+err.Error()))
+			app.W.Errorf("%s %s: %s\n", theme.Err.Render("✗"), n, err.Error())
 			_ = app.ensureCfg()
-			if app.Cfg == nil || app.Cfg.Defaults.Parallel == false || os.Getenv("YUM_DEBUG") != "" {
+			if app.Cfg == nil || !app.Cfg.Defaults.Parallel || os.Getenv("YUM_DEBUG") != "" {
 				app.W.Errorf("%s\n", buf.String())
 			}
 			continue

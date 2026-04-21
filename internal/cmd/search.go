@@ -6,6 +6,7 @@ import (
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/backend/brew"
 	"github.com/hunchom/bodega/internal/ui"
+	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
 // defaultHumanLimit caps the table rendered on a TTY. JSON output is
@@ -63,7 +64,7 @@ func newSearchCmd() *cobra.Command {
 			}
 
 			if len(results) == 0 {
-				app.W.Errorln("no matches")
+				app.W.Println(theme.Muted.Render("no matches"))
 				return nil
 			}
 
@@ -129,17 +130,22 @@ func effectiveLimit(limit int, changed, isJSON bool) int {
 
 // renderSearchTable renders the ranked results as a four-column table. The
 // ★ prefix on the name column signals a match that came from description,
-// tap, or a dep edge rather than the name itself.
+// tap, or a dep edge rather than the name itself. Installed versions glow
+// amber; latest-but-not-installed rows stay dim so the eye goes to what's
+// on disk.
 func renderSearchTable(results []brew.Result) string {
 	rows := make([][]string, 0, len(results))
 	for _, r := range results {
 		name := r.Pkg.Name
 		if r.MatchKind != brew.MatchName {
-			name = "★ " + name
+			name = theme.Header.Render("★") + " " + name
 		}
-		ver := r.Pkg.Version
-		if ver == "" {
-			ver = r.Pkg.Latest
+		var ver string
+		switch {
+		case r.Pkg.Version != "":
+			ver = theme.InstalledVersion(r.Pkg.Version)
+		case r.Pkg.Latest != "":
+			ver = theme.LatestVersion(r.Pkg.Latest)
 		}
 		rows = append(rows, []string{
 			name,
@@ -150,7 +156,7 @@ func renderSearchTable(results []brew.Result) string {
 	}
 	return (ui.Table{
 		Headers: []string{"name", "ver", "src", "desc"},
-		Aligns:  []ui.Align{ui.AlignLeft, ui.AlignLeft, ui.AlignLeft, ui.AlignLeft},
+		Aligns:  []ui.Align{ui.AlignLeft, ui.AlignRight, ui.AlignLeft, ui.AlignLeft},
 		Rows:    rows,
 	}).Render()
 }
@@ -163,7 +169,7 @@ func renderFlatSearch(app *AppCtx, pkgs []backend.Package, install bool) error {
 		return app.W.Print(pkgs)
 	}
 	if len(pkgs) == 0 {
-		app.W.Errorln("no matches")
+		app.W.Println(theme.Muted.Render("no matches"))
 		return nil
 	}
 	if !install || !app.W.IsTTY() {
