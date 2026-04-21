@@ -50,6 +50,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newReinstallCmd())
 	root.AddCommand(newUpgradeCmd())
 	root.AddCommand(newAutoremoveCmd())
+	root.AddCommand(newBrowseCmd())
 	root.AddCommand(newInfoCmd())
 	root.AddCommand(newOutdatedCmd())
 	root.AddCommand(newTreeCmd())

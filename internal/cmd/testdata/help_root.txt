@@ -5,6 +5,7 @@ Usage:
 
 Available Commands:
   autoremove  Remove orphaned dependencies
+  browse      Interactive package browser
   clean       Remove old versions and caches
   completions Generate shell completion script
   doctor      System and brew health check
