@@ -1,16 +1,20 @@
 # bodega
 
-Package manager for macOS. Wraps Homebrew with a `yum` / `dnf` command surface and adds rollback, transaction history, dependency trees, semver-diff on outdated, and a TOML manifest.
+Package manager for macOS. `yum` / `dnf` command surface over Homebrew with a native Go bottle installer (~4× faster than `brew install`), rollback, transaction history, dependency trees, semver-diff on outdated, a TOML manifest, an interactive TUI, a Claude Code plugin, and a Model Context Protocol server.
 
 Project: `bodega`. Binary: `yum`.
 
 ```sh
-yum install ripgrep
+yum install ripgrep            # native fast path, bottle via GHCR
+yum browse                     # interactive TUI
+yum search "text editor" --deps
 yum outdated
-yum tree openssl@3
-yum why openssl@3
-yum history
-yum rollback
+yum log ripgrep                # per-package event history
+yum verify                     # integrity check: missing deps, broken symlinks, orphans
+yum duplicates --prune         # collapse multiple cellar versions
+yum services                   # launchd services
+yum history                    # every transaction
+yum rollback                   # undo the last one
 yum manifest export > packages.toml
 ```
 
@@ -35,11 +39,21 @@ autoload -U compinit && compinit
 
 **yum parity.** `install`, `reinstall`, `remove` / `erase`, `autoremove`, `update` / `upgrade`, `check-update` / `outdated`, `search`, `info`, `list [installed|available|updates|leaves|pinned|casks]`, `provides`, `deplist` / `tree`, `clean`, `repolist`, `history`.
 
-**Beyond yum.** `why` (reverse deps), `size` (per-package disk usage), `pin` / `unpin`, `sync` (update + upgrade + autoremove + cleanup), `rollback`, `history info <id>`, `history undo <id>`, `doctor`, `manifest export` / `apply`, `completions <shell>`.
+**Beyond yum.** `why` (reverse deps), `size` (per-package disk usage), `pin` / `unpin`, `sync` (update + upgrade + autoremove + cleanup), `rollback`, `history info <id>`, `history undo <id>`, `log <pkg>` (per-package event history), `verify` (integrity check), `duplicates` (multi-version cellar), `services` (launchd), `browse` (interactive TUI), `doctor`, `manifest export` / `apply`, `completions <shell>`.
 
 **Global flags.** `--json`, `--yes` / `-y`, `--no-color`, `--debug`, `--dry-run`, `--refresh`, `--no-refresh`, `--config <path>`.
 
-`--json` works on every read command.
+`--json` works on every read command and on `verify`, `log`, `duplicates`, `services list`, `history`.
+
+## Claude Code integration
+
+bodega ships a Claude Code plugin under [`claude-plugin/`](./claude-plugin) with 12 slash commands (`/yum-install`, `/yum-search`, …), a proactive `package-doctor` subagent, and a `yum-packages` skill.
+
+It also ships an **Anthropic-native MCP server** under [`mcp-server/`](./mcp-server) — TypeScript, `@modelcontextprotocol/sdk`, zod schemas, 12 tools, 3 static resources + 2 templates, 2 prompts. Once installed, Claude can call `yum_install`, `yum_search`, etc. as native tools mid-conversation.
+
+```sh
+cd mcp-server && npm install && npm run build && npm link   # bodega-mcp on PATH
+```
 
 ## Data
 
@@ -70,13 +84,17 @@ autoload -U compinit && compinit
 
 ```
 cmd/yum/            entrypoint
-internal/backend/   backend interface and brew adapter
+internal/backend/   backend interface and brew adapter (native bottle install, GHCR, link/unlink, resolver)
 internal/cmd/       cobra commands (one per file)
 internal/config/    TOML loader
 internal/journal/   SQLite transaction log + rollback planner
 internal/runner/    exec abstraction
 internal/semver/    semver-diff classification
-internal/ui/        tables, panels, trees, progress, picker
+internal/tui/       interactive TUI (`yum browse` via bubbletea + lipgloss)
+internal/ui/        tables, panels, trees, picker, theme
+internal/verify/    install-tree integrity checks (`yum verify`)
+claude-plugin/      Claude Code plugin (slash commands + agents + skills)
+mcp-server/         Model Context Protocol server (TypeScript)
 ```
 
 ## License
