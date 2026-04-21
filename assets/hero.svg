@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 200" width="1200" height="200" role="img" aria-label="bodega — yum for macOS, with teeth">
+  <defs>
+    <style>
+      .mono   { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .sans   { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+      .fg     { fill: #1F2937; }
+      .dim    { fill: #6B7280; }
+      .accent { fill: #B4722E; }
+      @media (prefers-color-scheme: dark) {
+        .fg     { fill: #E6E9EF; }
+        .dim    { fill: #9AA3AF; }
+        .accent { fill: #E7A15A; }
+      }
+    </style>
+  </defs>
+
+  <text x="600" y="96" text-anchor="middle" class="mono" font-weight="700" font-size="64" letter-spacing="-1.5">
+    <tspan class="fg">bodega</tspan><tspan class="accent">.yum</tspan>
+  </text>
+
+  <rect x="540" y="116" width="120" height="3" rx="1.5" class="accent"/>
+
+  <text x="600" y="158" text-anchor="middle" class="sans dim" font-size="18" font-weight="400">
+    yum surface over Homebrew — native bottles, journaled, Claude-native
+  </text>
+</svg>
