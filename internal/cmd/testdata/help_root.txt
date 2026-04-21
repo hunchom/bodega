@@ -8,6 +8,7 @@ Available Commands:
   clean       Remove old versions and caches
   completions Generate shell completion script
   doctor      System and brew health check
+  duplicates  List packages with multiple installed Cellar versions
   help        Help about any command
   history     Transaction history
   info        Show package info

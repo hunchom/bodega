@@ -58,6 +58,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newProvidesCmd())
 	root.AddCommand(newRepolistCmd())
 	root.AddCommand(newCleanCmd())
+	root.AddCommand(newDuplicatesCmd())
 	root.AddCommand(newPinCmd(true))
 	root.AddCommand(newPinCmd(false))
 	root.AddCommand(newHistoryCmd())
