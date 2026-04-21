@@ -1,0 +1,17 @@
+{
+  "name": "bodega",
+  "version": "0.1.0",
+  "description": "Manage macOS packages from inside Claude Code — yum/dnf-style CLI over Homebrew, with rollback, history, and a proper TUI.",
+  "author": {
+    "name": "hunchom"
+  },
+  "homepage": "https://github.com/hunchom/bodega",
+  "repository": "https://github.com/hunchom/bodega",
+  "license": "MIT",
+  "keywords": [
+    "package-manager",
+    "homebrew",
+    "macos",
+    "yum"
+  ]
+}
