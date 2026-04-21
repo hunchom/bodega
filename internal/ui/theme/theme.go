@@ -1,6 +1,9 @@
 package theme
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+)
 
 var NoColor bool
 
@@ -35,6 +38,15 @@ var (
 func init() { Load() }
 
 func Load() {
+	// Pin the global color profile so output is deterministic across
+	// TTY/pipe/CI without depending on termenv's auto-detection. Matches
+	// how brew/git default: colors on unless the user disables them.
+	if NoColor {
+		lipgloss.SetColorProfile(termenv.Ascii)
+	} else {
+		lipgloss.SetColorProfile(termenv.TrueColor)
+	}
+
 	mk := func(c lipgloss.Color) lipgloss.Style {
 		s := lipgloss.NewStyle()
 		if !NoColor {
