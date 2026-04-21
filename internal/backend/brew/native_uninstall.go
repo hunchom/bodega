@@ -80,10 +80,10 @@ func (b *Brew) UninstallNative(ctx context.Context, names []string, opts Uninsta
 	// return deterministic Skipped lists and bail early on reverse-dep
 	// collisions without having mutated anything.
 	type pkgPlan struct {
-		name      string
-		pkgDir    string   // $PREFIX/Cellar/<name>
-		versions  []string // version dir names, unsorted
-		verPaths  []string // absolute version dir paths, aligned with versions
+		name     string
+		pkgDir   string   // $PREFIX/Cellar/<name>
+		versions []string // version dir names, unsorted
+		verPaths []string // absolute version dir paths, aligned with versions
 	}
 	var plans []pkgPlan
 	for i, name := range names {

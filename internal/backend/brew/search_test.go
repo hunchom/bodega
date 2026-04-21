@@ -36,10 +36,10 @@ func TestRankMatch(t *testing.T) {
 func fixtureFormulae() map[string]*APIFormula {
 	return map[string]*APIFormula{
 		"vim": {
-			Name:     "vim",
-			FullName: "vim",
-			Tap:      "homebrew/core",
-			Desc:     "Vi 'workalike' with many additional features",
+			Name:         "vim",
+			FullName:     "vim",
+			Tap:          "homebrew/core",
+			Desc:         "Vi 'workalike' with many additional features",
 			Dependencies: []string{"ncurses"},
 		},
 		"vimpager": {
@@ -49,10 +49,10 @@ func fixtureFormulae() map[string]*APIFormula {
 			Desc:     "Use ViM as PAGER",
 		},
 		"neovim": {
-			Name:     "neovim",
-			FullName: "neovim",
-			Tap:      "homebrew/core",
-			Desc:     "Ambitious Vim-fork focused on extensibility and agility",
+			Name:         "neovim",
+			FullName:     "neovim",
+			Tap:          "homebrew/core",
+			Desc:         "Ambitious Vim-fork focused on extensibility and agility",
 			Dependencies: []string{"libuv"},
 		},
 		"nano": {
@@ -68,10 +68,10 @@ func fixtureFormulae() map[string]*APIFormula {
 			Desc:     "Cryptography and SSL/TLS Toolkit",
 		},
 		"curl": {
-			Name:     "curl",
-			FullName: "curl",
-			Tap:      "homebrew/core",
-			Desc:     "Get a file from an HTTP, HTTPS or FTP server",
+			Name:         "curl",
+			FullName:     "curl",
+			Tap:          "homebrew/core",
+			Desc:         "Get a file from an HTTP, HTTPS or FTP server",
 			Dependencies: []string{"openssl@3", "zstd"},
 		},
 		"pacman": {

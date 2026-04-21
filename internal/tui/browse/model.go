@@ -46,22 +46,22 @@ type model struct {
 	ready  bool
 
 	// Data
-	scope         Scope
-	pkgs          []backend.Package // unfiltered, as returned for current scope
-	filtered      []int             // indices into pkgs
-	cache         map[Scope][]backend.Package
-	cursor        int // index within filtered slice
-	listOffset    int // scroll offset into filtered slice
-	info          *backend.Package
-	infoRevCount  int
-	infoName      string // name the current info is about (could be stale)
-	loadingList   bool
-	loadingInfo   bool
-	loadErr       error
+	scope        Scope
+	pkgs         []backend.Package // unfiltered, as returned for current scope
+	filtered     []int             // indices into pkgs
+	cache        map[Scope][]backend.Package
+	cursor       int // index within filtered slice
+	listOffset   int // scroll offset into filtered slice
+	info         *backend.Package
+	infoRevCount int
+	infoName     string // name the current info is about (could be stale)
+	loadingList  bool
+	loadingInfo  bool
+	loadErr      error
 
 	// Filter input
-	filter   textinput.Model
-	focus    focus
+	filter textinput.Model
+	focus  focus
 
 	// Confirm prompt
 	pending pendingMutation
