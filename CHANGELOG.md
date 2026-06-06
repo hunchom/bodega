@@ -4,6 +4,32 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- **Native package index — bodega no longer shells out to `brew` for metadata.**
+  `yum update` fetches Homebrew's signed `formula.jws.json` / `cask.jws.json`
+  straight from `formulae.brew.sh`, verifies the `homebrew-1` PS512 / RFC-7797
+  signature against the pinned key (a faithful port of brew's `api.rb`, proven
+  against the production signature), and builds a local SQLite index (FTS5
+  search, normalized deps + per-tag bottles) — no `brew update`. Refresh is
+  ETag-gated with a 24h stale window and a network→brew-cache→stale fallback.
+  Warm lookups are sub-millisecond vs brew's 200–600 ms JSON reparse, and the
+  index works on a host where `brew` was never run (`internal/index`).
+- **Native, no-brew command surface.** `info`, `search`, `outdated`,
+  `deps`/`tree`, `uses`/`why`, `leaves`, `formulae`, `tap`/`repolist`, and
+  `provides` are computed from the index + Cellar. `install`, `remove`,
+  `reinstall`, `upgrade`, `autoremove`, `cleanup`, and `pin`/`unpin` run through
+  the native primitives. The `brew` binary is invoked only for casks and
+  source-only formulae (no bottle for the host's macOS) — the two deliberate
+  escape hatches — and as a fallback when the index/prefix is cold.
+- `upgrade` relinks `opt` + the prefix symlinks to the new keg via the native
+  installer (Overwrite); casks, source-only formulae, and pinned formulae are
+  handled by brew / skipped so coverage never regresses.
+- `autoremove` computes orphans from the index dep graph + `INSTALL_RECEIPT.json`
+  (`installed_on_request`) and removes them natively; `cleanup` prunes stale
+  Cellar versions and bodega's bottle cache; `pin`/`unpin` manage the
+  `var/homebrew/pinned` symlink directly.
+
 ### Added
 
 - **Native Go bottle installer** (`install`) — resolves deps from brew's JWS API cache, downloads via GHCR OAuth2, extracts tar.gz, relocates Mach-O binaries via `install_name_tool` + re-codesigning, links into `$PREFIX`. ~4× faster than `brew install` for bottled formulae. Falls back to `brew install` for casks / source builds.

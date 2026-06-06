@@ -31,7 +31,9 @@
 
 Twenty-nine commands. Every read supports `--json`. Every mutation writes to a SQLite journal. Every install you ship can be undone with `yum history undo`.
 
-- **Native bottle installer** — resolves deps from brew's JWS cache, downloads via GHCR OAuth2, extracts, relocates Mach-O + re-codesigns. Falls back to `brew` for casks and source builds.
+- **Native package index** — fetches Homebrew's signed JSON index straight from `formulae.brew.sh`, verifies the `homebrew-1` PS512 signature, and stores it in a local SQLite index (FTS5 search, normalized deps + bottles). `yum update` builds it — no `brew update`. Warm lookups are sub-millisecond vs brew's 200–600 ms reparse, and it works on a host where `brew` was never run.
+- **Native, no-brew commands** — `update`, `info`, `search`, `outdated`, `deplist`/`tree`, `why`, `leaves`, `repolist`, `provides`, plus `install` / `remove` / `reinstall` / `upgrade` / `autoremove` / `cleanup` / `pin` all run against the index + filesystem directly. The `brew` binary is invoked only for casks and source-only formulae (no bottle for your macOS) — and even then only as a clearly-scoped fallback.
+- **Native bottle installer** — resolves deps from the index, downloads via GHCR OAuth2, extracts, relocates Mach-O + re-codesigns. Falls back to `brew` for casks and source builds.
 - **Transactional** — install / remove / upgrade / reinstall / pin / sync / manifest-apply all journaled. Undo any one with `yum history undo <id>`.
 - **Interactive TUI** — `yum browse`. Two panes, live filter, amber installed / dim latest, install-from-keyboard, help overlay.
 - **Claude Code plugin** — 12 slash commands, a proactive `package-doctor` agent, a `yum-packages` skill.
@@ -268,7 +270,7 @@ The pitch isn't "brew is bad." The pitch is "brew is a Ruby subprocess with a pl
 
 What this doesn't do, today, honestly:
 
-- **Not a brew replacement for casks or `--build-from-source`.** The native path is bottled formulae only; everything else transparently falls back to `brew install`. This is by design — tap resolution, bottle tag fallback, and Mach-O relocation are the interesting parts; casks and source builds are not.
+- **Casks and source-only formulae still shell out to `brew`.** Metadata and bottled-formula lifecycle are fully native (no `brew` binary), but installing a cask (dmg/pkg → `/Applications`, quarantine, sometimes `sudo`) and building a formula from source (running its Ruby `install` DSL) require brew's engine. These two are the deliberate, clearly-scoped escape hatches — everything else is native.
 - **Apple Silicon + Intel macOS only.** Linuxbrew works through the fallback path, but bottle tag resolution and GHCR retrieval assume `arm64_<macos>` or `x86_64_<macos>`.
 - **No cross-machine sync.** `manifest export` / `apply` is declarative within one machine. No multi-host rollout, no remote state store.
 - **TUI requires a real terminal.** Not a Claude Code TUI-rendering thing — it's bubbletea, which needs a proper stdio + TTY.
