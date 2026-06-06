@@ -662,7 +662,37 @@ func listTaps() ([]string, bool) {
 	return taps, true
 }
 
+// Pin / unpin a formula by managing the <prefix>/var/homebrew/pinned/<name>
+// symlink directly (brew's HOMEBREW_PINNED_KEGS convention: a link to the
+// pinned keg). No `brew pin`. Falls back to the subprocess only when the prefix
+// isn't discoverable.
 func (b *Brew) Pin(ctx context.Context, name string, pin bool) error {
+	prefix := brewPrefix()
+	if prefix == "" {
+		return b.pinBrew(ctx, name, pin)
+	}
+	link := prefix + "/var/homebrew/pinned/" + name
+	if pin {
+		kegDir := prefix + "/Cellar/" + name
+		ver := latestVersionDir(kegDir)
+		if ver == "" {
+			return fmt.Errorf("%s is not installed", name)
+		}
+		if err := os.MkdirAll(prefix+"/var/homebrew/pinned", 0o755); err != nil {
+			return err
+		}
+		_ = os.Remove(link) // idempotent re-pin
+		if err := os.Symlink(kegDir+"/"+ver, link); err != nil {
+			return err
+		}
+	} else if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	invalidateCache([]string{name})
+	return nil
+}
+
+func (b *Brew) pinBrew(ctx context.Context, name string, pin bool) error {
 	cmd := "pin"
 	if !pin {
 		cmd = "unpin"
