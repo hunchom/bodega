@@ -50,11 +50,19 @@ func (b *Brew) RefreshTaps(ctx context.Context, pw backend.ProgressWriter) error
 	if pw != nil {
 		sink = pw
 	}
-	r, err := b.R.Stream(ctx, sink, sink, "brew", "update", "--quiet")
+	// Capture stderr so a failed refresh reports brew's reason, not "exit N".
+	var outTail, errTail tailWriter
+	r, err := b.R.Stream(ctx,
+		io.MultiWriter(sink, &outTail),
+		io.MultiWriter(sink, &errTail),
+		"brew", "update", "--quiet")
 	if err != nil {
 		return err
 	}
 	if r.ExitCode != 0 {
+		if msg := lastBrewMessage(errTail.Bytes(), outTail.Bytes()); msg != "" {
+			return fmt.Errorf("brew update: %s", msg)
+		}
 		return fmt.Errorf("brew update: exit %d", r.ExitCode)
 	}
 	return nil

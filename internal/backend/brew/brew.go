@@ -77,17 +77,43 @@ func brewPrefix() string {
 
 func (b *Brew) Name() string { return "brew" }
 
+// PartialError reports that a batch mutation partially succeeded: Succeeded
+// names the packages that actually changed on disk before Err stopped the rest.
+// Callers journal Succeeded so `yum history undo` can still reverse real
+// changes instead of recording an all-failed transaction. errors.As/Is unwrap
+// to the underlying failure.
+type PartialError struct {
+	Succeeded []string
+	Err       error
+}
+
+func (e *PartialError) Error() string { return e.Err.Error() }
+func (e *PartialError) Unwrap() error { return e.Err }
+
 // SearchNative walks brew's JWS cache in-process and returns matches by
 // substring. It's a strict subset of what `brew search` does (no fuzzy
 // matching, no descriptions-only flag), but on the hot path it replaces a
 // 500ms subprocess with a 50-150ms map scan. Returns (nil, err) when the
 // API cache is unavailable so the caller can fall back to Search.
 func (b *Brew) SearchNative(ctx context.Context, q string) ([]backend.Package, error) {
-	ac := apiCache()
-	if ac == nil {
-		return nil, fmt.Errorf("brew api cache disabled")
+	if st := readyIndex(ctx); st != nil {
+		ms, err := st.Search(q, 200)
+		if err == nil {
+			out := make([]backend.Package, 0, len(ms))
+			for _, m := range ms {
+				src := backend.SrcFormula
+				if m.Source == "cask" {
+					src = backend.SrcCask
+				}
+				out = append(out, backend.Package{Name: m.Name, Source: src, Desc: m.Desc})
+			}
+			return out, nil
+		}
 	}
-	return ac.SearchNames(q)
+	if ac := apiCache(); ac != nil {
+		return ac.SearchNames(q)
+	}
+	return nil, fmt.Errorf("no search index available")
 }
 
 func (b *Brew) Search(ctx context.Context, q string) ([]backend.Package, error) {
@@ -125,10 +151,21 @@ func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) 
 		}
 		// Parse failed on cached data — treat it as a miss and re-fetch.
 	}
-	// 2) brew's own API cache. No subprocess, no network; one mmap-ish
-	// read of ~/Library/Caches/Homebrew/api/*.jws.json and a map lookup.
-	// We overlay installed version metadata by scanning the Cellar so the
-	// user sees the version they actually have, not just the latest stable.
+	// 2) our native index (no brew). A single indexed SQLite query; overlay
+	// the installed version from the Cellar so the user sees what they have.
+	if st := readyIndex(ctx); st != nil {
+		if f, err := st.Lookup(name); err == nil && f != nil {
+			p := indexFormulaToPackage(f)
+			overlayInstalled(p)
+			return p, nil
+		}
+		if ck, err := st.LookupCask(name); err == nil && ck != nil {
+			p := indexCaskToPackage(ck)
+			overlayInstalled(p)
+			return p, nil
+		}
+	}
+	// 3) brew's own API cache, when present — fallback for a cold index.
 	if ac := apiCache(); ac != nil {
 		if p, err := ac.Lookup(name); err == nil && p != nil {
 			overlayInstalled(p)
@@ -471,11 +508,19 @@ func (b *Brew) Cleanup(ctx context.Context, deep bool) error {
 }
 
 func (b *Brew) Doctor(ctx context.Context) ([]string, error) {
-	out, _ := b.R.Run(ctx, "brew", "doctor")
+	// brew doctor exits non-zero when it finds problems — that's expected, so we
+	// ignore ExitCode. But a Run-level error (brew not on PATH) is real: surface
+	// it instead of returning zero warnings, which would read as "healthy".
+	out, err := b.R.Run(ctx, "brew", "doctor")
+	if err != nil {
+		return nil, fmt.Errorf("brew doctor: %w", err)
+	}
 	var warns []string
-	sc := bufio.NewScanner(strings.NewReader(string(out.Stdout)))
+	// Findings land on stdout and/or stderr depending on brew version; scan both.
+	combined := string(out.Stdout) + "\n" + string(out.Stderr)
+	sc := bufio.NewScanner(strings.NewReader(combined))
 	for sc.Scan() {
-		l := sc.Text()
+		l := strings.TrimSpace(sc.Text())
 		if strings.HasPrefix(l, "Warning:") || strings.HasPrefix(l, "Error:") {
 			warns = append(warns, l)
 		}
@@ -500,11 +545,20 @@ func (b *Brew) stream(ctx context.Context, w backend.ProgressWriter, args ...str
 	if w != nil {
 		sink = w
 	}
-	r, err := b.R.Stream(ctx, sink, sink, "brew", args...)
+	// Tee stdout+stderr into capped tail buffers so a non-zero exit can report
+	// brew's real error line — not a bald "exit N". sink still gets live output.
+	var outTail, errTail tailWriter
+	r, err := b.R.Stream(ctx,
+		io.MultiWriter(sink, &outTail),
+		io.MultiWriter(sink, &errTail),
+		"brew", args...)
 	if err != nil {
 		return err
 	}
 	if r.ExitCode != 0 {
+		if msg := lastBrewMessage(errTail.Bytes(), outTail.Bytes()); msg != "" {
+			return fmt.Errorf("brew %s: %s", args[0], msg)
+		}
 		return fmt.Errorf("brew %s: exit %d", args[0], r.ExitCode)
 	}
 	return nil
@@ -516,7 +570,7 @@ func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWr
 	// reparsing the formula DB. ErrNativeUnsupported means the host can't
 	// run the native path (no Homebrew prefix, cold API cache) — fall back
 	// to the subprocess silently. Any other error is a real failure.
-	_, err := b.InstallNative(ctx, names, InstallOpts{
+	res, err := b.InstallNative(ctx, names, InstallOpts{
 		Progress: func(ev InstallEvent) {
 			if w == nil || ev.Message == "" {
 				return
@@ -529,6 +583,12 @@ func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWr
 		return nil
 	}
 	if !errors.Is(err, ErrNativeUnsupported) {
+		// Native path ran and may have installed some roots before failing.
+		// Surface them so the caller journals real on-disk changes.
+		if done := installedRoots(res); len(done) > 0 {
+			invalidateCache(done)
+			return &PartialError{Succeeded: done, Err: err}
+		}
 		return err
 	}
 	if err := b.stream(ctx, w, append([]string{"install"}, names...)...); err != nil {
@@ -537,13 +597,28 @@ func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWr
 	invalidateCache(names)
 	return nil
 }
+
+// installedRoots returns the user-requested (root) formula names that an
+// InstallNative result actually installed. Nil-safe.
+func installedRoots(res *InstallResult) []string {
+	if res == nil {
+		return nil
+	}
+	var done []string
+	for _, p := range res.Installed {
+		if p.IsRoot {
+			done = append(done, p.Name)
+		}
+	}
+	return done
+}
 func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWriter) error {
 	// Native uninstall first — same fast-path pattern as Install. No
 	// subprocess, no Ruby boot, 10-100ms vs brew's ~2s for a single
 	// formula. ErrNativeUnsupported means "not a standard Homebrew
 	// layout" — degrade to the subprocess silently. Any other error is
 	// a real failure and must be surfaced.
-	_, err := b.UninstallNative(ctx, names, UninstallOpts{
+	res, err := b.UninstallNative(ctx, names, UninstallOpts{
 		Progress: func(ev UninstallEvent) {
 			if w == nil || ev.Message == "" {
 				return
@@ -556,6 +631,13 @@ func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWri
 		return nil
 	}
 	if !errors.Is(err, ErrNativeUnsupported) {
+		// Native teardown ran and may have removed some packages before
+		// failing on another. Surface them so the caller journals the real
+		// removals instead of an all-failed transaction.
+		if res != nil && len(res.Removed) > 0 {
+			invalidateCache(res.Removed)
+			return &PartialError{Succeeded: res.Removed, Err: err}
+		}
 		return err
 	}
 	if err := b.stream(ctx, w, append([]string{"uninstall"}, names...)...); err != nil {
@@ -618,23 +700,48 @@ type infoV2 struct {
 
 var _ = json.Unmarshal // keep the import visible in parse.go callers
 
-// brewErr turns a non-zero brew invocation into a user-facing error. It prefers
-// the last non-empty stderr line (which is usually the "Error: ..." message
-// brew prints) and falls back to a canned message when stderr is empty.
-func brewErr(sub, arg string, r *runner.Result) error {
-	msg := ""
-	for l := range strings.SplitSeq(string(r.Stderr), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			msg = l
-		}
-	}
-	if msg == "" {
-		for l := range strings.SplitSeq(string(r.Stdout), "\n") {
+// lastBrewMessage returns the last non-empty line of stderr (usually brew's
+// "Error: ..." line), falling back to stdout. Empty when both are blank.
+// Shared by brewErr (Run path) and stream (Stream path) so streamed mutations
+// surface the same real reason as buffered ones, not a bald "exit N".
+func lastBrewMessage(stderr, stdout []byte) string {
+	for _, src := range [][]byte{stderr, stdout} {
+		msg := ""
+		for l := range strings.SplitSeq(string(src), "\n") {
 			if l = strings.TrimSpace(l); l != "" {
 				msg = l
 			}
 		}
+		if msg != "" {
+			return msg
+		}
 	}
+	return ""
+}
+
+// tailWriter keeps only the last `cap` bytes written. Enough to recover brew's
+// final error line without buffering an entire upgrade log in memory.
+type tailWriter struct {
+	buf []byte
+}
+
+const tailWriterCap = 8 << 10
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > tailWriterCap {
+		t.buf = t.buf[len(t.buf)-tailWriterCap:]
+	}
+	return len(p), nil
+}
+
+func (t *tailWriter) Bytes() []byte { return t.buf }
+
+// brewErr turns a non-zero brew invocation into a user-facing error. It prefers
+// the last non-empty stderr line (which is usually the "Error: ..." message
+// brew prints) and falls back to a canned message when stderr is empty.
+func brewErr(sub, arg string, r *runner.Result) error {
+	msg := lastBrewMessage(r.Stderr, r.Stdout)
 	if arg != "" {
 		if msg == "" {
 			return fmt.Errorf("brew %s %s: exit %d", sub, arg, r.ExitCode)

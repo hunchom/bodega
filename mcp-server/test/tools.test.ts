@@ -187,18 +187,98 @@ test("yum_list normalizes 'outdated' -> 'updates' subcommand", async () => {
   }
 });
 
-test("yum_remove with force adds --force flag", async () => {
+test("yum_remove passes packages without the dropped --force flag", async () => {
   const runner = new FakeRunner((args) => {
-    assert.deepEqual(args, ["--json", "remove", "-y", "--force", "openssl"]);
-    return ok({ removed: ["openssl"] });
+    assert.deepEqual(args, ["--json", "remove", "-y", "openssl"]);
+    return ok({ removed: ["openssl"], failed: [] });
   });
   const { client, close } = await withClient(runner);
   try {
     const result = await client.callTool({
       name: "yum_remove",
-      arguments: { packages: ["openssl"], force: true },
+      arguments: { packages: ["openssl"] },
     });
     assert.equal(result.isError, undefined);
+    const structured = result.structuredContent as { removed: string[] };
+    assert.deepEqual(structured.removed, ["openssl"]);
+  } finally {
+    await close();
+  }
+});
+
+test("partial install failure surfaces the structured payload, not a flat error", async () => {
+  // CLI exits 1 but prints the partial-result envelope on stdout. The MCP tool
+  // must report which packages installed and which failed, not collapse it all
+  // into one opaque error.
+  const runner = new FakeRunner(() => ({
+    stdout: JSON.stringify({
+      installed: ["git"],
+      failed: [{ package: "bogus", error: "No available formula bogus" }],
+    }),
+    stderr: "yum: install: one or more packages failed",
+    exitCode: 1,
+  }));
+  const { client, close } = await withClient(runner);
+  try {
+    const result = await client.callTool({
+      name: "yum_install",
+      arguments: { packages: ["git", "bogus"] },
+    });
+    assert.equal(result.isError, undefined);
+    const structured = result.structuredContent as {
+      installed: string[];
+      failed: Array<{ package: string }>;
+    };
+    assert.deepEqual(structured.installed, ["git"]);
+    assert.equal(structured.failed.length, 1);
+    assert.equal(structured.failed[0]!.package, "bogus");
+  } finally {
+    await close();
+  }
+});
+
+test("yum_verify returns the report even when the tree has issues (exit 1)", async () => {
+  // verify exits 1 with a full JSON report on stdout. The MCP path must deliver
+  // the report, not throw away exactly the case verify exists to surface.
+  const runner = new FakeRunner((args) => {
+    assert.deepEqual(args, ["--json", "verify"]);
+    return {
+      stdout: JSON.stringify({
+        issues: [{ kind: "broken-symlink", path: "/opt/homebrew/bin/foo" }],
+        passed: false,
+      }),
+      stderr: "yum:",
+      exitCode: 1,
+    };
+  });
+  const { client, close } = await withClient(runner);
+  try {
+    const result = await client.callTool({
+      name: "yum_verify",
+      arguments: {},
+    });
+    assert.equal(result.isError, undefined);
+    const structured = result.structuredContent as {
+      issues: { issues: unknown[]; passed: boolean };
+    };
+    assert.equal(structured.issues.passed, false);
+    assert.equal(structured.issues.issues.length, 1);
+  } finally {
+    await close();
+  }
+});
+
+test("a genuine hard failure (no structured stdout) still surfaces as isError", async () => {
+  const runner = new FakeRunner(() => fail("Error: database is locked"));
+  const { client, close } = await withClient(runner);
+  try {
+    const result = await client.callTool({
+      name: "yum_install",
+      arguments: { packages: ["git"] },
+    });
+    assert.equal(result.isError, true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    assert.match(content[0]!.text, /database is locked/);
   } finally {
     await close();
   }

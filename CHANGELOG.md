@@ -19,6 +19,16 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- **Streamed brew failures now report the real reason instead of `exit N`.** `yum update` / `upgrade` / `reinstall` / `remove` and tap refresh (`brew update`) captured brew's stderr only to discard it; a failed `brew upgrade` surfaced a bald `✗ brew upgrade: exit 1`. The streaming path now tees stderr and surfaces brew's actual `Error:` line, matching the `brewErr` behavior of the non-streamed commands.
+- `yum upgrade` / `update` now stream brew's progress live instead of buffering it silently (a long upgrade no longer looks frozen). Failure output is no longer suppressed by the `parallel` default; set `YUM_DEBUG=1` to always dump the full captured output.
+- `yum upgrade --json` on a whole-system upgrade no longer reports `{"upgraded":[],"failed":[]}` on failure — the payload carries a top-level `error`.
+- Interrupted transactions (Ctrl-C mid-mutation) are no longer journaled as `✓`. `End()` finalizes on a detached context so the terminal exit code always lands; a process killed before `End()` ran now renders `⚠` (incomplete) rather than a fake success.
+- Native partial removes/installs now journal the packages that actually changed on disk (via a typed partial-error), so `yum history undo` can reverse real changes instead of recording an all-failed, un-undoable transaction.
+- `yum rollback` / `history undo` now continues through every step (was bailing on the first failure, leaving the rest un-reverted), journals the undo as its own reversible transaction, and exits non-zero on any failed or wholly-unrevertable (downgrade) rollback.
+- `yum sync` now journals its autoremoved packages (so a sync is partially undoable), aborts when the tap refresh fails instead of upgrading against stale metadata and claiming success, and respects `--json` (no more human chatter leaking into machine output). Its cleanup step is gated by the now-functional `auto_cleanup` config (default on).
+- `yum doctor` surfaces an error when `brew` can't be run (was reporting "system healthy"), and scans both stdout and stderr for findings.
+- **MCP parity:** `yum_verify` returns its report even when the tree has issues (the CLI exits 1 with the report on stdout; the server was discarding it), and `yum_install` / `yum_upgrade` / `yum_remove` surface the structured partial-failure payload (which packages succeeded vs failed) instead of collapsing to one opaque error. Fixed a stale `yum_remove --force` unit test left over from dropping the flag; added the MCP server (typecheck + tests) to CI.
+- Install scripts hardened: `build.sh` no longer aborts the (succeeded) CLI install when the optional MCP install fails, no longer truncates a good zsh completion file when generation fails, and warns when npm's global bin is off PATH; `patch-zshrc.sh` writes atomically so a failed rewrite can't truncate `~/.zshrc`.
 - `yum sync` now journals its steps and honors `--dry-run` (previously invisible to history and would execute on dry-run).
 - `yum manifest apply` now journals installed formulae, casks, and pins under verb `manifest-apply`.
 - `yum verify` orphan detection uses semver comparison (was string comparison — flagged 1.10 as older than 1.9).

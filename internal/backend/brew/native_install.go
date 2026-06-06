@@ -127,15 +127,12 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 	if prefix == "" {
 		return nil, ErrNativeUnsupported
 	}
-	cache := apiCache()
-	if cache == nil {
-		return nil, ErrNativeUnsupported
-	}
-	// Warming the formula map here gives us an early, cheap failure: if
-	// brew's API cache file is missing we want to degrade gracefully
-	// before touching the network or the filesystem.
-	if _, err := cache.LoadFormulae(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrNativeUnsupported, err)
+	// Formula data comes from the native index (preferred) or brew's API cache.
+	// An early, cheap failure here lets us degrade to the brew subprocess before
+	// touching the network or filesystem.
+	src, err := b.formulaSource(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	cacheDir, err := resolveBottleCacheDir(opts.CacheDir)
@@ -159,7 +156,7 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 	emit := progressEmitter(opts.Progress)
 
 	// Phase 1: resolve.
-	plans, err := Resolve(ctx, cache, names)
+	plans, err := Resolve(ctx, src, names)
 	if err != nil {
 		return nil, fmt.Errorf("native install: resolve: %w", err)
 	}

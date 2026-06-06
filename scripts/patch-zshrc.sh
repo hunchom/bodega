@@ -14,14 +14,23 @@ BACKUP="${ZSHRC}.yum-$(date +%Y%m%d-%H%M%S).bak"
 cp "$ZSHRC" "$BACKUP"
 echo "backed up → $BACKUP"
 
-# Delete from "# ─── yum → brew shim" or "yum() {" marker down through its closing '}'
-awk '
+# Delete from "# ─── yum → brew shim" or "yum() {" marker down through its closing '}'.
+# Write to a temp file in the same dir and rename on success so a failed/aborted
+# awk can never leave ~/.zshrc truncated. mv within the same filesystem is atomic.
+tmp="$(mktemp "${ZSHRC}.patch.XXXXXX")"
+if awk '
   /^# ─── yum → brew shim/ { skip=1; next }
   skip && /^}/             { skip=0; next }
   skip                     { next }
   /^yum\(\) \{/            { skip=1; next }
   { print }
-' "$BACKUP" > "$ZSHRC"
+' "$BACKUP" > "$tmp"; then
+  mv "$tmp" "$ZSHRC"
+else
+  rm -f "$tmp"
+  echo "patch failed — ~/.zshrc left unchanged (backup at $BACKUP)" >&2
+  exit 1
+fi
 
 echo "patched ~/.zshrc — old yum() removed"
 echo 'reload shell or run: source ~/.zshrc'

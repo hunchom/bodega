@@ -194,8 +194,16 @@ do_install_cli() {
 
   step "writing zsh completion"
   install -d "$COMP_DIR"
-  "./${BINARY}" completions zsh > "${COMP_DIR}/_${BINARY}"
-  ok "${COMP_DIR}/_${BINARY}"
+  # Generate to a temp file so a failed/empty generation can't truncate a
+  # prior-good completion or abort the whole install under `set -e`.
+  comp_tmp="$(mktemp)"
+  if "./${BINARY}" completions zsh > "$comp_tmp" 2>/dev/null && [ -s "$comp_tmp" ]; then
+    install -m 0644 "$comp_tmp" "${COMP_DIR}/_${BINARY}"
+    ok "${COMP_DIR}/_${BINARY}"
+  else
+    warn "completion generation failed — leaving existing _${BINARY} untouched"
+  fi
+  rm -f "$comp_tmp"
 
   step "patching ~/.zshrc (legacy yum shim)"
   if ./scripts/patch-zshrc.sh >/dev/null 2>&1; then ok "zshrc clean"; else warn "zshrc unchanged"; fi
@@ -213,19 +221,36 @@ do_install_mcp() {
     return 0
   fi
 
+  # Each substantive stage is guarded so a failure warns and returns non-zero
+  # from this function instead of aborting the whole script under `set -e` —
+  # the MCP server is an optional add-on and must not take down CLI-install
+  # reporting. The caller (do_install) treats a non-zero return as non-fatal.
   step "installing dependencies"
-  (cd "$MCP_DIR" && npm install --silent --no-audit --no-fund)
+  (cd "$MCP_DIR" && npm install --silent --no-audit --no-fund) \
+    || { err "npm install failed — MCP server not installed (CLI is fine)"; return 1; }
   ok "npm install"
 
   step "compiling TypeScript"
-  (cd "$MCP_DIR" && npm run --silent build)
+  (cd "$MCP_DIR" && npm run --silent build) \
+    || { err "npm run build failed — MCP server not installed (CLI is fine)"; return 1; }
   ok "dist/ built"
 
   step "linking ${MCP_PKG} globally"
   # Unlink first for a clean relink — npm link is idempotent but noisy.
   (cd "$MCP_DIR" && npm unlink -g --silent "$MCP_PKG" >/dev/null 2>&1 || true)
-  (cd "$MCP_DIR" && npm link --silent)
-  ok "${MCP_BIN} → $(command -v "$MCP_BIN" 2>/dev/null || echo '(not on PATH)')"
+  (cd "$MCP_DIR" && npm link --silent) \
+    || { err "npm link failed — MCP server built but not linked (CLI is fine)"; return 1; }
+
+  # Report the link, and if npm's global bin dir isn't on PATH, tell the user
+  # how to wire it up — otherwise a successful install looks like it vanished.
+  if command -v "$MCP_BIN" >/dev/null 2>&1; then
+    ok "${MCP_BIN} → $(command -v "$MCP_BIN")"
+  else
+    local mcp_path
+    mcp_path="$(npm prefix -g 2>/dev/null)/bin/${MCP_BIN}"
+    ok "${MCP_BIN} linked at ${mcp_path}"
+    warn "$(dirname "$mcp_path") is not on PATH — add it, then register: claude mcp add bodega -- ${mcp_path}"
+  fi
 }
 
 # ── install (combined) ────────────────────────────────────────────────────────
@@ -257,7 +282,8 @@ do_install() {
   if [ "${INSTALL_MCP:-1}" -eq 1 ]; then
     echo
     step "installing MCP server"
-    do_install_mcp
+    # MCP failure must not abort the CLI-success epilogue below.
+    do_install_mcp || warn "MCP server install failed — CLI is installed and usable; re-run with --mcp-only to retry"
   else
     echo
     warn "--no-mcp set — skipping MCP server install"

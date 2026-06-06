@@ -21,7 +21,10 @@ func newDoctorCmd() *cobra.Command {
 			}
 			defer app.CloseJournal()
 
-			warns, _ := app.Registry.Primary().Doctor(app.Ctx)
+			warns, err := app.Registry.Primary().Doctor(app.Ctx)
+			if err != nil {
+				return err
+			}
 
 			// PATH check for our own binary
 			if _, err := os.Stat(os.ExpandEnv("$HOME/.local/bin/yum")); err == nil {

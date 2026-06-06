@@ -39,11 +39,15 @@ func installWithStubbedAPICache(t *testing.T, ac *APICache) {
 	sharedAPICache = ac
 	sharedAPICacheOnce.Do(func() {})
 	apiCacheDisabled = false
+	// Disable the native index so the resolver uses our stubbed API cache rather
+	// than the host's real index.db (or trying to build one over the network).
+	indexDisabled = true
 
 	t.Cleanup(func() {
 		sharedAPICacheOnce = sync.Once{}
 		sharedAPICache = nil
 		apiCacheDisabled = false
+		indexDisabled = false
 	})
 }
 
@@ -63,10 +67,12 @@ func TestInstallNative_ErrNativeUnsupported_NoPrefix(t *testing.T) {
 func TestInstallNative_ErrNativeUnsupported_NoAPICache(t *testing.T) {
 	installWithStubbedPrefix(t, t.TempDir())
 
-	// apiCacheDisabled=true makes apiCache() return nil.
+	// apiCacheDisabled=true makes apiCache() return nil; indexDisabled keeps the
+	// native index out so neither source is available.
 	prev := apiCacheDisabled
 	apiCacheDisabled = true
-	t.Cleanup(func() { apiCacheDisabled = prev })
+	indexDisabled = true
+	t.Cleanup(func() { apiCacheDisabled = prev; indexDisabled = false })
 
 	b := &Brew{}
 	_, err := b.InstallNative(context.Background(), []string{"ripgrep"}, InstallOpts{DryRun: true})

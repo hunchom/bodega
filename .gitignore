@@ -6,3 +6,6 @@
 *.prof
 .idea/
 .vscode/
+
+# harness cron state
+.claude/scheduled_tasks.*

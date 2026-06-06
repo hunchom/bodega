@@ -161,7 +161,18 @@ autoload -U compinit && compinit
 
 Or copy the directory into `~/.claude/plugins/` manually.
 
-**MCP server** (TypeScript, adds 12 `yum_*` tools to Claude's tool list):
+**MCP server** (TypeScript, adds 12 `yum_*` tools to Claude's tool list) — installed automatically by `./build.sh --install` (skip with `--no-mcp`). To rebuild and relink it on its own, run `./build.sh --mcp-only`.
+
+After install, register it with Claude Code:
+
+```bash
+claude mcp add bodega -- bodega-mcp
+```
+
+The claude-plugin also ships a `.mcp.json` that references `bodega-mcp`, so once it's on PATH the MCP tools auto-register when you enable the plugin.
+
+<details>
+<summary>Manual install (without build.sh)</summary>
 
 ```bash
 cd ~/bodega/mcp-server
@@ -169,11 +180,10 @@ npm install
 npm run build
 npm link                        # puts bodega-mcp on PATH
 ```
-
-The claude-plugin ships a `.mcp.json` that references `bodega-mcp` — once it's on PATH, the MCP tools auto-register when you enable the plugin.
+</details>
 
 > [!TIP]
-> Restart your Claude Code session after `npm link` so the tool registry reloads. Verify with "list my installed packages" — Claude should call `yum_list` directly instead of shelling out to `brew`.
+> Restart your Claude Code session after install so the tool registry reloads. Verify with "list my installed packages" — Claude should call `yum_list` directly instead of shelling out to `brew`.
 
 ## Configure
 

@@ -87,35 +87,65 @@ func (a *AppCtx) CloseJournal() {
 	}
 }
 
-// maybeRefreshTaps runs `brew update` when the caller actually needs fresh
-// tap state (install/upgrade/outdated/sync). Honors the --refresh and
-// --no-refresh global flags; otherwise gated by the 24h staleness threshold
-// in brew.DefaultStaleAge. Prints a short status line so the user sees why
-// they're waiting when a refresh happens — suppressed under --json so
-// scripted callers never get a surprise line of human chatter.
+// maybeRefreshTaps refreshes the native package index when the caller needs
+// fresh metadata (install/upgrade/outdated/sync). It fetches + verifies
+// Homebrew's signed JSON index ourselves (internal/index) — never `brew update`.
+// Honors --refresh / --no-refresh; otherwise gated by the index's own 24h
+// staleness window. Prints a short status line (suppressed under --json).
 func maybeRefreshTaps(app *AppCtx) {
 	if Flags.NoRefresh || Flags.DryRun {
 		return
 	}
-	if !Flags.Refresh && !brew.Stale(brew.DefaultStaleAge) {
-		return
-	}
-	// Resolve the *brew.Brew from the registry so we can call RefreshTaps.
 	bb, ok := app.Registry.Primary().(*brew.Brew)
 	if !ok {
 		return
 	}
+	if !Flags.Refresh && !bb.IndexStale() {
+		return
+	}
 	if !app.W.JSON {
-		app.W.Printf("%s %s\n", theme.Muted.Render("→"), "taps stale — refreshing")
+		app.W.Printf("%s %s\n", theme.Muted.Render("→"), "index stale — refreshing")
 	}
 	start := time.Now()
-	if err := bb.RefreshTaps(app.Ctx, nil); err != nil {
+	// Native: fetch + verify Homebrew's signed index ourselves. No `brew update`.
+	refreshed, err := bb.RefreshIndex(app.Ctx, Flags.Refresh)
+	if err != nil {
 		if !app.W.JSON {
 			app.W.Errorf("%s refresh failed: %v\n", theme.Warn.Render("•"), err)
 		}
 		return
 	}
-	if !app.W.JSON {
+	if !app.W.JSON && refreshed {
 		app.W.Printf("%s %s\n", theme.OK.Render("✓"), fmt.Sprintf("refreshed (%s)", time.Since(start).Round(100*time.Millisecond)))
 	}
+}
+
+// refreshTaps is the strict variant of maybeRefreshTaps: it returns the
+// RefreshTaps error instead of swallowing it. sync uses this because its
+// documented contract includes "update" — a failed refresh must abort rather
+// than silently downgrade sync to upgrade-only against stale tap metadata.
+func refreshTaps(app *AppCtx) error {
+	if Flags.NoRefresh || Flags.DryRun {
+		return nil
+	}
+	bb, ok := app.Registry.Primary().(*brew.Brew)
+	if !ok {
+		return nil
+	}
+	if !Flags.Refresh && !bb.IndexStale() {
+		return nil
+	}
+	if !app.W.JSON {
+		app.W.Printf("%s %s\n", theme.Muted.Render("→"), "index stale — refreshing")
+	}
+	start := time.Now()
+	// Native index refresh; surfaces the error (sync's "update" step must abort).
+	refreshed, err := bb.RefreshIndex(app.Ctx, Flags.Refresh)
+	if err != nil {
+		return err
+	}
+	if !app.W.JSON && refreshed {
+		app.W.Printf("%s %s\n", theme.OK.Render("✓"), fmt.Sprintf("refreshed (%s)", time.Since(start).Round(100*time.Millisecond)))
+	}
+	return nil
 }

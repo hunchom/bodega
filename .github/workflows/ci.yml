@@ -43,10 +43,34 @@ jobs:
       - name: test
         run: go test -race -timeout 60s ./...
 
+  mcp:
+    name: mcp-server (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mcp-server/package-lock.json
+
+      - name: install
+        working-directory: mcp-server
+        run: npm ci
+
+      - name: typecheck
+        working-directory: mcp-server
+        run: npm run typecheck
+
+      - name: test
+        working-directory: mcp-server
+        run: npm test
+
   build-matrix:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, mcp]
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +81,8 @@ jobs:
             goarch: amd64
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags so `git describe --tags` resolves real releases
 
       - uses: actions/setup-go@v5
         with:
@@ -70,7 +96,7 @@ jobs:
           CGO_ENABLED: 0
         run: |
           VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
-          COMMIT=$(git rev-parse --short HEAD)
+          COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo none)
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           go build -trimpath \
             -ldflags="-s -w \

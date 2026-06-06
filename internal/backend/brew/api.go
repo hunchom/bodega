@@ -323,6 +323,24 @@ func (c *APICache) SearchNames(q string) ([]backend.Package, error) {
 	return out, nil
 }
 
+// ResolveFormula implements the resolver's FormulaSource over brew's API cache.
+// Returns (nil, nil) for a clean miss so Resolve reports ErrFormulaNotFound.
+func (c *APICache) ResolveFormula(name string) (*ResolvedFormula, error) {
+	formulae, err := c.LoadFormulae()
+	if err != nil {
+		return nil, err
+	}
+	f, ok := formulae[name]
+	if !ok || f == nil {
+		return nil, nil
+	}
+	bottles := make(map[string]BottleFile, len(f.Bottle.Stable.Files))
+	for tag, bf := range f.Bottle.Stable.Files {
+		bottles[tag] = BottleFile{URL: bf.URL, SHA256: bf.SHA256}
+	}
+	return &ResolvedFormula{Name: f.Name, Version: f.Versions.Stable, Deps: f.Dependencies, Bottles: bottles}, nil
+}
+
 // formulaToPackage builds a backend.Package from an API formula entry. The
 // stable version is used as the "latest" version; callers that care about
 // the installed version should overlay a Cellar check on top.

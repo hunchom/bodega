@@ -46,7 +46,11 @@ type Transaction struct {
 	Cmdline     string
 	YumVersion  string
 	BrewVersion string
-	Packages    []TxPackage
+	// Incomplete is true when ended_at was never written — the process died
+	// (SIGKILL / power loss) before End() ran. Distinguishes a real exit-0
+	// success from an aborted tx that only looks like one.
+	Incomplete bool
+	Packages   []TxPackage
 }
 
 type TxPackage struct {
@@ -68,19 +72,27 @@ func (j *Journal) Begin(ctx context.Context, verb, cmdline, yv, bv string) (int6
 }
 
 func (j *Journal) End(ctx context.Context, id int64, exit int, pkgs []TxPackage) error {
-	tx, err := j.db.BeginTx(ctx, nil)
+	// Finalize even when the caller's ctx was cancelled mid-transaction (Ctrl-C
+	// cancels app.Ctx in boot()). If we reused the cancelled ctx, BeginTx would
+	// fail, the terminal UPDATE would never land, and history would render the
+	// aborted tx as ✓ (COALESCE(exit_code,0)). Detach + a short timeout so the
+	// final write always completes.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	tx, err := j.db.BeginTx(fctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(fctx,
 		`UPDATE transactions SET ended_at=?, exit_code=? WHERE id=?`,
 		time.Now().Unix(), exit, id); err != nil {
 		return err
 	}
 	for _, p := range pkgs {
-		if _, err := tx.ExecContext(ctx,
+		if _, err := tx.ExecContext(fctx,
 			`INSERT INTO transaction_packages(transaction_id,name,from_version,to_version,source,action) VALUES (?,?,?,?,?,?)`,
 			id, p.Name, p.FromVersion, p.ToVersion, p.Source, p.Action); err != nil {
 			return err
@@ -91,7 +103,7 @@ func (j *Journal) End(ctx context.Context, id int64, exit int, pkgs []TxPackage)
 
 func (j *Journal) Recent(ctx context.Context, limit int) ([]Transaction, error) {
 	rows, err := j.db.QueryContext(ctx,
-		`SELECT id, started_at, COALESCE(ended_at,0), verb, COALESCE(exit_code,0), cmdline FROM transactions ORDER BY id DESC LIMIT ?`, limit)
+		`SELECT id, started_at, COALESCE(ended_at,0), verb, COALESCE(exit_code,0), cmdline, (ended_at IS NULL) FROM transactions ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -100,13 +112,15 @@ func (j *Journal) Recent(ctx context.Context, limit int) ([]Transaction, error) 
 	for rows.Next() {
 		var t Transaction
 		var s, e int64
-		if err := rows.Scan(&t.ID, &s, &e, &t.Verb, &t.ExitCode, &t.Cmdline); err != nil {
+		var inc int
+		if err := rows.Scan(&t.ID, &s, &e, &t.Verb, &t.ExitCode, &t.Cmdline, &inc); err != nil {
 			return nil, err
 		}
 		t.StartedAt = time.Unix(s, 0)
 		if e > 0 {
 			t.EndedAt = time.Unix(e, 0)
 		}
+		t.Incomplete = inc != 0
 		out = append(out, t)
 	}
 	return out, nil
@@ -114,10 +128,11 @@ func (j *Journal) Recent(ctx context.Context, limit int) ([]Transaction, error) 
 
 func (j *Journal) Get(ctx context.Context, id int64) (*Transaction, error) {
 	row := j.db.QueryRowContext(ctx,
-		`SELECT id, started_at, COALESCE(ended_at,0), verb, COALESCE(exit_code,0), cmdline, yum_version, brew_version FROM transactions WHERE id=?`, id)
+		`SELECT id, started_at, COALESCE(ended_at,0), verb, COALESCE(exit_code,0), cmdline, yum_version, brew_version, (ended_at IS NULL) FROM transactions WHERE id=?`, id)
 	var t Transaction
 	var s, e int64
-	if err := row.Scan(&t.ID, &s, &e, &t.Verb, &t.ExitCode, &t.Cmdline, &t.YumVersion, &t.BrewVersion); err != nil {
+	var inc int
+	if err := row.Scan(&t.ID, &s, &e, &t.Verb, &t.ExitCode, &t.Cmdline, &t.YumVersion, &t.BrewVersion, &inc); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("transaction %d not found", id)
 		}
@@ -127,6 +142,7 @@ func (j *Journal) Get(ctx context.Context, id int64) (*Transaction, error) {
 	if e > 0 {
 		t.EndedAt = time.Unix(e, 0)
 	}
+	t.Incomplete = inc != 0
 	rows, err := j.db.QueryContext(ctx,
 		`SELECT name, COALESCE(from_version,''), COALESCE(to_version,''), source, action FROM transaction_packages WHERE transaction_id=?`, id)
 	if err != nil {

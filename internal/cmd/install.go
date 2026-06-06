@@ -104,10 +104,18 @@ func runInstall(app *AppCtx, names []string) error {
 		if installed == nil {
 			installed = []string{}
 		}
-		_ = app.W.Print(map[string]any{
+		payload := map[string]any{
 			"installed": installed,
 			"failed":    failed,
-		})
+		}
+		if last != nil {
+			payload["error"] = "install: one or more packages failed"
+		}
+		// Propagate a JSON write failure only when no more-specific install
+		// error is already pending (that one is more informative).
+		if perr := app.W.Print(payload); perr != nil && last == nil {
+			return perr
+		}
 	}
 	if last != nil {
 		return fmt.Errorf("install: one or more packages failed")

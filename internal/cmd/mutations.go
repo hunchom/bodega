@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/backend/brew"
 	"github.com/hunchom/bodega/internal/journal"
 	"github.com/hunchom/bodega/internal/ui/theme"
 )
@@ -26,7 +29,7 @@ func newRemoveCmd() *cobra.Command {
 			defer app.CloseJournal()
 			return runMutate(app, "remove", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Remove(app.Ctx, names, pw)
-			}, "removed")
+			}, "removed", false)
 		},
 	}
 	return c
@@ -45,7 +48,7 @@ func newReinstallCmd() *cobra.Command {
 			defer app.CloseJournal()
 			return runMutate(app, "reinstall", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Reinstall(app.Ctx, names, pw)
-			}, "reinstalled")
+			}, "reinstalled", true)
 		},
 	}
 }
@@ -64,7 +67,7 @@ func newUpgradeCmd() *cobra.Command {
 			maybeRefreshTaps(app)
 			return runMutate(app, "upgrade", args, func(names []string, pw backend.ProgressWriter) error {
 				return app.Registry.Primary().Upgrade(app.Ctx, names, pw)
-			}, "upgraded")
+			}, "upgraded", true)
 		},
 	}
 }
@@ -186,7 +189,13 @@ func pluralize(word string, n int) string {
 	return word + "s"
 }
 
-func runMutate(app *AppCtx, verb string, names []string, doer func([]string, backend.ProgressWriter) error, action string) error {
+// runMutate runs a single batch mutation (remove/reinstall/upgrade) inside one
+// journal transaction. When live is true and we're not in --json mode, brew's
+// output streams straight to the terminal so a long upgrade doesn't look
+// frozen; otherwise it's buffered and dumped on failure. A *brew.PartialError
+// from the doer is journaled package-by-package so partial on-disk changes stay
+// undoable via `yum history undo`.
+func runMutate(app *AppCtx, verb string, names []string, doer func([]string, backend.ProgressWriter) error, action string, live bool) error {
 	for _, n := range names {
 		if strings.TrimSpace(n) == "" {
 			return fmt.Errorf("%s: empty package name", verb)
@@ -208,22 +217,51 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 	var txPkgs []journal.TxPackage
 	exit := 0
 	var buf bytes.Buffer
-	pw := &backend.StreamPW{W: &buf}
+	var pw *backend.StreamPW
+	if live && !app.W.JSON {
+		pw = &backend.StreamPW{W: app.W.Out} // stream live; nothing to re-dump on failure
+	} else {
+		pw = &backend.StreamPW{W: &buf} // buffer for on-failure dump / quiet under --json
+	}
 	var failed []map[string]string
 	var runErr error
 
 	if err := doer(names, pw); err != nil {
 		exit = 1
 		runErr = err
-		if !app.W.JSON {
-			app.W.Errorf("%s %s\n", theme.Err.Render("✗"), err.Error())
-			_ = app.ensureCfg()
-			if app.Cfg == nil || !app.Cfg.Defaults.Parallel {
-				app.W.Errorf("%s\n", buf.String())
+		// A partial failure carries the names that actually changed on disk —
+		// journal those as successes so they remain undoable; mark the rest failed.
+		succeeded := map[string]bool{}
+		var pe *brew.PartialError
+		if errors.As(err, &pe) {
+			for _, n := range pe.Succeeded {
+				if !succeeded[n] {
+					succeeded[n] = true
+					txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "formula", Action: action})
+				}
 			}
 		}
 		for _, n := range names {
-			failed = append(failed, map[string]string{"package": n, "error": err.Error()})
+			if !succeeded[n] {
+				failed = append(failed, map[string]string{"package": n, "error": err.Error()})
+			}
+		}
+		if !app.W.JSON {
+			app.W.Errorf("%s %s\n", theme.Err.Render("✗"), err.Error())
+			// Show brew's captured output on failure unless suppressed. Gated like
+			// install.go: hidden under Defaults.Parallel unless YUM_DEBUG is set.
+			// (live mode already streamed it, so buf is empty there.)
+			if buf.Len() > 0 {
+				_ = app.ensureCfg()
+				if app.Cfg == nil || !app.Cfg.Defaults.Parallel || os.Getenv("YUM_DEBUG") != "" {
+					app.W.Errorf("%s\n", buf.String())
+				}
+			}
+			for _, n := range names {
+				if succeeded[n] {
+					app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
+				}
+			}
 		}
 	} else {
 		for _, n := range names {
@@ -237,17 +275,29 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 		return err
 	}
 	if app.W.JSON {
-		succeeded := []string{}
+		succeededNames := []string{}
 		if exit == 0 {
-			succeeded = names
+			succeededNames = names
+		} else {
+			for _, p := range txPkgs {
+				succeededNames = append(succeededNames, p.Name)
+			}
 		}
 		if failed == nil {
 			failed = []map[string]string{}
 		}
-		_ = app.W.Print(map[string]any{
-			action:   succeeded,
+		payload := map[string]any{
+			action:   succeededNames,
 			"failed": failed,
-		})
+		}
+		// A no-arg bulk upgrade has no per-package names, so without this the
+		// JSON would read {"upgraded":[],"failed":[]} on a real failure — a lie.
+		if exit != 0 {
+			payload["error"] = fmt.Sprintf("%s: %v", verb, runErr)
+		}
+		if perr := app.W.Print(payload); perr != nil && exit == 0 {
+			return perr
+		}
 	}
 	if exit != 0 {
 		return fmt.Errorf("%s: %v", verb, runErr)

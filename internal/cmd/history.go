@@ -42,7 +42,11 @@ func newHistoryCmd() *cobra.Command {
 			rows := make([][]string, 0, len(txs))
 			for _, t := range txs {
 				status := theme.OK.Render("✓")
-				if t.ExitCode != 0 {
+				switch {
+				case t.Incomplete:
+					// ended_at never written → process died before End() ran.
+					status = theme.Warn.Render("⚠")
+				case t.ExitCode != 0:
 					status = theme.Err.Render("✗")
 				}
 				rows = append(rows, []string{

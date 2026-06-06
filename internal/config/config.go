@@ -34,6 +34,9 @@ func defaults() *Config {
 	c.UI.Theme = "amber"
 	c.UI.ConfirmDestructive = true
 	c.Defaults.Parallel = true
+	// On by default so `yum sync` keeps running its cleanup step; set
+	// auto_cleanup = false in config.toml to skip it.
+	c.Defaults.AutoCleanup = true
 	return c
 }
 

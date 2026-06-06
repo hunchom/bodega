@@ -36,6 +36,29 @@ var (
 	ErrFormulaNotFound = errors.New("formula not found in api cache")
 )
 
+// BottleFile is one resolved bottle (absolute GHCR URL + hex sha256).
+type BottleFile struct {
+	URL    string
+	SHA256 string
+}
+
+// ResolvedFormula is the per-formula data Resolve needs: runtime deps + the
+// available bottles by tag. Both the native index and the legacy brew API cache
+// produce these.
+type ResolvedFormula struct {
+	Name    string
+	Version string
+	Deps    []string
+	Bottles map[string]BottleFile
+}
+
+// FormulaSource supplies ResolvedFormula records by name. ResolveFormula returns
+// (nil, nil) for a clean miss (name not present). Implemented by *index.Store
+// (via an adapter) and *APICache.
+type FormulaSource interface {
+	ResolveFormula(name string) (*ResolvedFormula, error)
+}
+
 // Resolve computes the ordered install plan for the given roots.
 //
 // Ordering: dependencies (leaves) come first. If B depends on A, A appears
@@ -48,17 +71,13 @@ var (
 // formula name if nothing matches.
 //
 // Returns ErrFormulaNotFound wrapped with the missing name if a root or
-// transitive dep isn't present in the APICache.
+// transitive dep isn't present in the source.
 //
 // Cycles produce a descriptive error listing the cycle path; callers can
 // surface this to users verbatim.
-func Resolve(ctx context.Context, cache *APICache, roots []string) ([]Plan, error) {
-	if cache == nil {
-		return nil, fmt.Errorf("resolve: nil api cache")
-	}
-	formulae, err := cache.LoadFormulae()
-	if err != nil {
-		return nil, fmt.Errorf("resolve: load formulae: %w", err)
+func Resolve(ctx context.Context, src FormulaSource, roots []string) ([]Plan, error) {
+	if src == nil {
+		return nil, fmt.Errorf("resolve: nil formula source")
 	}
 
 	prefs := BottleTagPreference()
@@ -104,15 +123,18 @@ func Resolve(ctx context.Context, cache *APICache, roots []string) ([]Plan, erro
 			return fmt.Errorf("resolve: dependency cycle: %s", strings.Join(path, " -> "))
 		}
 
-		f, ok := formulae[name]
-		if !ok || f == nil {
+		f, ferr := src.ResolveFormula(name)
+		if ferr != nil {
+			return fmt.Errorf("resolve: %s: %w", name, ferr)
+		}
+		if f == nil {
 			return fmt.Errorf("resolve: %s: %w", name, ErrFormulaNotFound)
 		}
 
 		visiting[name] = struct{}{}
 		stack = append(stack, name)
 
-		for _, dep := range f.Dependencies {
+		for _, dep := range f.Deps {
 			if dep == "" {
 				continue
 			}
@@ -131,7 +153,7 @@ func Resolve(ctx context.Context, cache *APICache, roots []string) ([]Plan, erro
 
 		order = append(order, Plan{
 			Name:      name,
-			Version:   f.Versions.Stable,
+			Version:   f.Version,
 			Tag:       tag,
 			BottleURL: file.URL,
 			SHA256:    strings.ToLower(file.SHA256),
@@ -153,19 +175,18 @@ func Resolve(ctx context.Context, cache *APICache, roots []string) ([]Plan, erro
 }
 
 // pickBottle walks prefs in order and returns the first tag present in the
-// formula's bottle file map. Formulae publish exactly one URL per tag, so
-// the first hit is always the best.
-func pickBottle(f *APIFormula, prefs []string) (string, APIBottleFile, bool) {
-	files := f.Bottle.Stable.Files
-	if len(files) == 0 {
-		return "", APIBottleFile{}, false
+// formula's bottle map. Formulae publish exactly one URL per tag, so the first
+// hit is always the best.
+func pickBottle(f *ResolvedFormula, prefs []string) (string, BottleFile, bool) {
+	if len(f.Bottles) == 0 {
+		return "", BottleFile{}, false
 	}
 	for _, tag := range prefs {
-		if bf, ok := files[tag]; ok && bf.URL != "" {
+		if bf, ok := f.Bottles[tag]; ok && bf.URL != "" {
 			return tag, bf, true
 		}
 	}
-	return "", APIBottleFile{}, false
+	return "", BottleFile{}, false
 }
 
 // BottleTagPreference returns the host's preferred bottle-tag list, most
