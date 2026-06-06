@@ -109,6 +109,45 @@ func (b *Brew) formulaSource(ctx context.Context) (FormulaSource, error) {
 	return nil, ErrNativeUnsupported
 }
 
+// availableFormulae lists every formula name in the index as a Package.
+func availableFormulae(st *index.Store) ([]backend.Package, error) {
+	names, err := st.AllFormulaNames()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]backend.Package, 0, len(names))
+	for _, n := range names {
+		out = append(out, backend.Package{Name: n, Source: backend.SrcFormula})
+	}
+	return out, nil
+}
+
+// leavesNative computes installed formulae that no other installed formula
+// depends on at runtime — the native equivalent of `brew leaves`.
+func leavesNative(st *index.Store) []backend.Package {
+	installed := cellarFormulaSet()
+	depended := map[string]bool{}
+	for name := range installed {
+		deps, err := st.Deps(name)
+		if err != nil {
+			continue
+		}
+		for _, d := range deps {
+			if installed[d] {
+				depended[d] = true
+			}
+		}
+	}
+	var out []backend.Package
+	for name := range installed {
+		if !depended[name] {
+			out = append(out, backend.Package{Name: name, Source: backend.SrcFormula})
+		}
+	}
+	sortPackagesByName(out)
+	return out
+}
+
 // indexFormulaToPackage adapts an index Formula to a backend.Package.
 func indexFormulaToPackage(f *index.Formula) *backend.Package {
 	return &backend.Package{

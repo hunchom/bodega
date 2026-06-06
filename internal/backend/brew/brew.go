@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -237,6 +238,9 @@ func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Packag
 	case backend.ListOutdated:
 		return b.Outdated(ctx)
 	case backend.ListLeaves:
+		if st := readyIndex(ctx); st != nil {
+			return leavesNative(st), nil
+		}
 		out, err := b.R.Run(ctx, "brew", "leaves")
 		if err != nil {
 			return nil, err
@@ -262,6 +266,9 @@ func (b *Brew) List(ctx context.Context, f backend.ListFilter) ([]backend.Packag
 		}
 		return pkgs, nil
 	case backend.ListAvailable:
+		if st := readyIndex(ctx); st != nil {
+			return availableFormulae(st)
+		}
 		out, err := b.R.Run(ctx, "brew", "formulae")
 		if err != nil {
 			return nil, err
@@ -300,6 +307,57 @@ func listCellarFormulae() ([]backend.Package, bool) {
 	}
 	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].Name < pkgs[j].Name })
 	return pkgs, true
+}
+
+// sortPackagesByName sorts in place by Name.
+func sortPackagesByName(pkgs []backend.Package) {
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].Name < pkgs[j].Name })
+}
+
+// providesNative scans installed Cellar bin dirs for an executable named cmd
+// and returns the owning formula names. ok is false when the prefix isn't
+// discoverable (caller falls back to brew).
+func providesNative(cmd string) (owners []string, ok bool) {
+	prefix := brewPrefix()
+	if prefix == "" {
+		return nil, false
+	}
+	cellar := prefix + "/Cellar"
+	names, err := os.ReadDir(cellar)
+	if err != nil {
+		return nil, false
+	}
+	for _, n := range names {
+		if !n.IsDir() || strings.HasPrefix(n.Name(), ".") {
+			continue
+		}
+		vers, err := os.ReadDir(cellar + "/" + n.Name())
+		if err != nil {
+			continue
+		}
+		for _, v := range vers {
+			if !v.IsDir() {
+				continue
+			}
+			if st, err := os.Stat(cellar + "/" + n.Name() + "/" + v.Name() + "/bin/" + cmd); err == nil && !st.IsDir() {
+				owners = append(owners, n.Name())
+				break
+			}
+		}
+	}
+	sort.Strings(owners)
+	return owners, true
+}
+
+// cellarFormulaSet returns the set of installed formula names from the Cellar.
+func cellarFormulaSet() map[string]bool {
+	set := map[string]bool{}
+	if pkgs, ok := listCellarFormulae(); ok {
+		for _, p := range pkgs {
+			set[p.Name] = true
+		}
+	}
+	return set
 }
 
 // listCaskroom does the same thing as listCellarFormulae for casks.
@@ -408,6 +466,47 @@ func (b *Brew) parseListVersions(ctx context.Context, flag string) ([]backend.Pa
 }
 
 func (b *Brew) Outdated(ctx context.Context) ([]backend.Package, error) {
+	st := readyIndex(ctx)
+	if st == nil {
+		return b.outdatedBrew(ctx)
+	}
+	var out []backend.Package
+	// Formulae: installed Cellar version vs the index's current full version
+	// (stable plus revision). outdated callers refresh first, so a differing
+	// version is genuinely behind.
+	if installed, ok := listCellarFormulae(); ok {
+		for _, p := range installed {
+			f, err := st.Lookup(p.Name)
+			if err != nil || f == nil {
+				continue
+			}
+			full := f.StableVersion
+			if f.Revision > 0 {
+				full = f.StableVersion + "_" + strconv.Itoa(f.Revision)
+			}
+			if full != "" && p.Version != full {
+				out = append(out, backend.Package{Name: p.Name, Source: backend.SrcFormula, Version: p.Version, Latest: full})
+			}
+		}
+	}
+	// Casks: skip `version :latest` tokens (brew only upgrades those with
+	// --greedy; their version string is always "latest").
+	if casks, ok := listCaskroom(); ok {
+		for _, p := range casks {
+			ck, err := st.LookupCask(p.Name)
+			if err != nil || ck == nil || ck.Version == "" || ck.Version == "latest" {
+				continue
+			}
+			if p.Version != ck.Version {
+				out = append(out, backend.Package{Name: p.Name, Source: backend.SrcCask, Version: p.Version, Latest: ck.Version})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (b *Brew) outdatedBrew(ctx context.Context) ([]backend.Package, error) {
 	out, err := b.R.Run(ctx, "brew", "outdated", "--json=v2")
 	if err != nil {
 		return nil, err
@@ -419,6 +518,33 @@ func (b *Brew) Outdated(ctx context.Context) ([]backend.Package, error) {
 }
 
 func (b *Brew) Deps(ctx context.Context, name string) (*backend.DepTree, error) {
+	st := readyIndex(ctx)
+	if st == nil {
+		return b.depsBrew(ctx, name)
+	}
+	// DAG view: each transitive runtime dep expands once; a global visited set
+	// also guards against dependency cycles.
+	visited := map[string]bool{}
+	var build func(n string) *backend.DepTree
+	build = func(n string) *backend.DepTree {
+		node := &backend.DepTree{Name: n}
+		if visited[n] {
+			return node
+		}
+		visited[n] = true
+		deps, err := st.Deps(n)
+		if err != nil {
+			return node
+		}
+		for _, d := range deps {
+			node.Children = append(node.Children, build(d))
+		}
+		return node
+	}
+	return build(name), nil
+}
+
+func (b *Brew) depsBrew(ctx context.Context, name string) (*backend.DepTree, error) {
 	out, err := b.R.Run(ctx, "brew", "deps", "--tree", name)
 	if err != nil {
 		return nil, err
@@ -430,6 +556,21 @@ func (b *Brew) Deps(ctx context.Context, name string) (*backend.DepTree, error) 
 }
 
 func (b *Brew) ReverseDeps(ctx context.Context, name string) ([]string, error) {
+	if st := readyIndex(ctx); st != nil {
+		consumers, err := st.ReverseDeps(name)
+		if err != nil {
+			return nil, err
+		}
+		// `uses --installed`: keep only consumers actually in the Cellar.
+		installed := cellarFormulaSet()
+		var out []string
+		for _, c := range consumers {
+			if installed[c] {
+				out = append(out, c)
+			}
+		}
+		return out, nil
+	}
 	out, err := b.R.Run(ctx, "brew", "uses", "--installed", name)
 	if err != nil {
 		return nil, err
@@ -447,7 +588,15 @@ func (b *Brew) ReverseDeps(ctx context.Context, name string) ([]string, error) {
 	return names, nil
 }
 
+// Provides reports which installed formulae ship an executable named cmd, by
+// scanning <prefix>/Cellar/<name>/<ver>/bin directly. The command→formula map
+// for *uninstalled* formulae isn't in the JSON API, so this is installed-only
+// (the `brew which-formula` subprocess remains the fallback when there's no
+// discoverable prefix).
 func (b *Brew) Provides(ctx context.Context, cmd string) ([]string, error) {
+	if owners, ok := providesNative(cmd); ok {
+		return owners, nil
+	}
 	out, err := b.R.Run(ctx, "brew", "which-formula", cmd)
 	if err != nil {
 		return nil, err
@@ -458,7 +607,13 @@ func (b *Brew) Provides(ctx context.Context, cmd string) ([]string, error) {
 	return strings.Fields(string(out.Stdout)), nil
 }
 
+// Taps lists installed taps by reading <prefix>/Library/Taps/<user>/homebrew-<repo>
+// directly — no `brew tap`. Falls back to the subprocess only when the prefix
+// isn't discoverable.
 func (b *Brew) Taps(ctx context.Context) ([]string, error) {
+	if taps, ok := listTaps(); ok {
+		return taps, nil
+	}
 	out, err := b.R.Run(ctx, "brew", "tap")
 	if err != nil {
 		return nil, err
@@ -473,6 +628,38 @@ func (b *Brew) Taps(ctx context.Context) ([]string, error) {
 		}
 	}
 	return taps, nil
+}
+
+// listTaps reads the Taps tree. Each <user>/homebrew-<repo> dir is the tap
+// "<user>/<repo>". Returns (nil,false) when the prefix or Taps dir is absent.
+func listTaps() ([]string, bool) {
+	prefix := brewPrefix()
+	if prefix == "" {
+		return nil, false
+	}
+	root := prefix + "/Library/Taps"
+	users, err := os.ReadDir(root)
+	if err != nil {
+		return nil, false
+	}
+	var taps []string
+	for _, u := range users {
+		if !u.IsDir() || strings.HasPrefix(u.Name(), ".") {
+			continue
+		}
+		repos, err := os.ReadDir(root + "/" + u.Name())
+		if err != nil {
+			continue
+		}
+		for _, r := range repos {
+			if !r.IsDir() || !strings.HasPrefix(r.Name(), "homebrew-") {
+				continue
+			}
+			taps = append(taps, u.Name()+"/"+strings.TrimPrefix(r.Name(), "homebrew-"))
+		}
+	}
+	sort.Strings(taps)
+	return taps, true
 }
 
 func (b *Brew) Pin(ctx context.Context, name string, pin bool) error {
