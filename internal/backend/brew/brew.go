@@ -173,7 +173,7 @@ func (b *Brew) Info(ctx context.Context, name string) (*backend.Package, error) 
 			return p, nil
 		}
 	}
-	// 3) Last resort — ask brew itself.
+	// 4) Last resort — ask brew itself.
 	out, err := b.R.Run(ctx, "brew", "info", "--json=v2", name)
 	if err != nil {
 		return nil, err
@@ -708,7 +708,36 @@ func (b *Brew) pinBrew(ctx context.Context, name string, pin bool) error {
 	return nil
 }
 
+// Cleanup removes stale Cellar versions (keeping the linked/newest keg and
+// relinking) and prunes bodega's bottle download cache — no `brew cleanup`.
+// Falls back to the subprocess when the prefix isn't discoverable.
 func (b *Brew) Cleanup(ctx context.Context, deep bool) error {
+	prefix := brewPrefix()
+	if prefix == "" {
+		return b.cleanupBrew(ctx, deep)
+	}
+	dups, err := FindDuplicates(nil)
+	if err != nil {
+		return err
+	}
+	for _, d := range dups {
+		keep := d.Linked
+		if keep == "" {
+			keep = d.Versions[len(d.Versions)-1] // newest (sorted oldest→newest)
+		}
+		if _, err := PruneDuplicate(d, keep); err != nil {
+			return err
+		}
+	}
+	// Drop bodega's bottle download cache — pure cache, safe to clear.
+	if dir, derr := resolveBottleCacheDir(""); derr == nil {
+		_ = os.RemoveAll(dir)
+	}
+	clearCache()
+	return nil
+}
+
+func (b *Brew) cleanupBrew(ctx context.Context, deep bool) error {
 	args := []string{"cleanup"}
 	if deep {
 		args = append(args, "--prune=all")
@@ -864,25 +893,191 @@ func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWri
 	return nil
 }
 func (b *Brew) Reinstall(ctx context.Context, names []string, w backend.ProgressWriter) error {
-	if err := b.stream(ctx, w, append([]string{"reinstall"}, names...)...); err != nil {
+	// Native: tear the keg down (Force skips the reverse-dep guard — we're
+	// replacing, not removing) then re-install via the native fast path. Falls
+	// back to `brew reinstall` when the native uninstall layout isn't supported.
+	_, uerr := b.UninstallNative(ctx, names, UninstallOpts{
+		Force:    true,
+		Progress: func(ev UninstallEvent) { fwd(w, ev.Message) },
+	})
+	if errors.Is(uerr, ErrNativeUnsupported) {
+		if err := b.stream(ctx, w, append([]string{"reinstall"}, names...)...); err != nil {
+			return err
+		}
+		invalidateCache(names)
+		return nil
+	}
+	if uerr != nil {
+		return uerr
+	}
+	if err := b.Install(ctx, names, w); err != nil {
 		return err
 	}
 	invalidateCache(names)
 	return nil
 }
+
+// fwd writes a non-empty progress message to w when w is non-nil.
+func fwd(w backend.ProgressWriter, msg string) {
+	if w != nil && msg != "" {
+		fmt.Fprintln(w, msg)
+	}
+}
+
+// Upgrade upgrades formulae through the native bottle installer (relinking opt
+// and the prefix symlinks to the new keg) and routes casks, source-only
+// formulae, and cold-index cases to brew so coverage never regresses. Pinned
+// formulae are skipped in an upgrade-all. The old keg is left for Cleanup.
 func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWriter) error {
+	st := readyIndex(ctx)
+	if st == nil {
+		return b.upgradeBrew(ctx, w, names)
+	}
+
+	var native, viaBrew []string
+	if len(names) > 0 {
+		for _, n := range names {
+			if hasHostBottle(st, n) {
+				native = append(native, n)
+			} else {
+				viaBrew = append(viaBrew, n) // cask / unbottled / unknown → brew
+			}
+		}
+	} else {
+		outdated, err := b.Outdated(ctx)
+		if err != nil {
+			return err
+		}
+		pinned := pinnedSet()
+		for _, p := range outdated {
+			switch {
+			case p.Source == backend.SrcCask:
+				viaBrew = append(viaBrew, p.Name)
+			case pinned[p.Name]:
+				// skip pinned
+			case hasHostBottle(st, p.Name):
+				native = append(native, p.Name)
+			default:
+				viaBrew = append(viaBrew, p.Name) // source-only formula
+			}
+		}
+	}
+
+	if len(native) > 0 {
+		_, err := b.InstallNative(ctx, native, InstallOpts{
+			Overwrite: true,
+			Progress:  func(ev InstallEvent) { fwd(w, ev.Message) },
+		})
+		if err != nil {
+			if !errors.Is(err, ErrNativeUnsupported) {
+				return err
+			}
+			viaBrew = append(viaBrew, native...) // native unsupported → brew
+		} else {
+			invalidateCache(native)
+		}
+	}
+	if len(viaBrew) > 0 {
+		if err := b.upgradeBrew(ctx, w, viaBrew); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Brew) upgradeBrew(ctx context.Context, w backend.ProgressWriter, names []string) error {
 	if err := b.stream(ctx, w, append([]string{"upgrade"}, names...)...); err != nil {
 		return err
 	}
 	invalidateCache(names)
 	return nil
 }
+
+// pinnedSet returns the set of pinned formula names.
+func pinnedSet() map[string]bool {
+	set := map[string]bool{}
+	if pkgs, ok := listPinned(); ok {
+		for _, p := range pkgs {
+			set[p.Name] = true
+		}
+	}
+	return set
+}
 func (b *Brew) Autoremove(ctx context.Context, w backend.ProgressWriter) error {
-	if err := b.stream(ctx, w, "autoremove"); err != nil {
+	st := readyIndex(ctx)
+	prefix := brewPrefix()
+	if st == nil || prefix == "" {
+		if err := b.stream(ctx, w, "autoremove"); err != nil {
+			return err
+		}
+		clearCache()
+		return nil
+	}
+	// Orphan = installed, NOT installed-on-request, and no installed formula
+	// depends on it. Single pass under-removes (a re-run peels the next layer),
+	// which is the safe direction.
+	installed := cellarFormulaSet()
+	needed := map[string]bool{}
+	for name := range installed {
+		deps, err := st.Deps(name)
+		if err != nil {
+			continue
+		}
+		for _, d := range deps {
+			if installed[d] {
+				needed[d] = true
+			}
+		}
+	}
+	var orphans []string
+	for name := range installed {
+		if needed[name] || installedOnRequest(prefix, name) {
+			continue
+		}
+		orphans = append(orphans, name)
+	}
+	sort.Strings(orphans)
+	if len(orphans) == 0 {
+		clearCache()
+		return nil
+	}
+	res, err := b.UninstallNative(ctx, orphans, UninstallOpts{
+		Progress: func(ev UninstallEvent) { fwd(w, ev.Message) },
+	})
+	// Emit lines the cmd layer's parseUninstalled understands so the journal
+	// records what actually came down.
+	if res != nil {
+		for _, n := range res.Removed {
+			fwd(w, "Uninstalling "+n+"...")
+		}
+	}
+	if err != nil {
 		return err
 	}
 	clearCache()
 	return nil
+}
+
+// installedOnRequest reads a keg's INSTALL_RECEIPT.json. A formula installed on
+// the user's explicit request is never auto-removed. Missing/unreadable receipt
+// → treat as on-request (keep) so we never remove something we're unsure about.
+func installedOnRequest(prefix, name string) bool {
+	kegDir := prefix + "/Cellar/" + name
+	ver := latestVersionDir(kegDir)
+	if ver == "" {
+		return true
+	}
+	data, err := os.ReadFile(kegDir + "/" + ver + "/INSTALL_RECEIPT.json")
+	if err != nil {
+		return true
+	}
+	var r struct {
+		InstalledOnRequest *bool `json:"installed_on_request"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil || r.InstalledOnRequest == nil {
+		return true
+	}
+	return *r.InstalledOnRequest
 }
 
 // Helper JSON types (narrow — ignore fields we don't use).

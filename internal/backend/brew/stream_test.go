@@ -11,13 +11,15 @@ import (
 // A streamed mutation that exits non-zero must surface brew's real stderr line,
 // not a bald "brew upgrade: exit 1". This is the headline bug: `yum update` →
 // `brew upgrade: exit 1` with no reason.
+// With the index disabled (TestMain), an explicit upgrade routes through the
+// brew path; a failure must surface brew's real stderr line, not "exit N".
 func TestUpgradeSurfacesBrewStderr(t *testing.T) {
 	fake := &runner.Fake{
-		Stderr:   map[string]string{"brew upgrade": "Warning: noise\nError: cask 'foo' is not installed\n"},
-		ExitCode: map[string]int{"brew upgrade": 1},
+		Stderr:   map[string]string{"brew upgrade foo": "Warning: noise\nError: cask 'foo' is not installed\n"},
+		ExitCode: map[string]int{"brew upgrade foo": 1},
 	}
 	b := &Brew{R: fake}
-	err := b.Upgrade(context.Background(), nil, nil)
+	err := b.Upgrade(context.Background(), []string{"foo"}, nil)
 	if err == nil {
 		t.Fatal("expected upgrade error")
 	}
@@ -29,9 +31,9 @@ func TestUpgradeSurfacesBrewStderr(t *testing.T) {
 // When brew prints nothing, fall back to the exit-code form rather than an
 // empty "brew upgrade: ".
 func TestUpgradeFallsBackToExitCode(t *testing.T) {
-	fake := &runner.Fake{ExitCode: map[string]int{"brew upgrade": 1}}
+	fake := &runner.Fake{ExitCode: map[string]int{"brew upgrade foo": 1}}
 	b := &Brew{R: fake}
-	err := b.Upgrade(context.Background(), nil, nil)
+	err := b.Upgrade(context.Background(), []string{"foo"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "exit 1") {
 		t.Fatalf("want exit-code fallback, got %v", err)
 	}

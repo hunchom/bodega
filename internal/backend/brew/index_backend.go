@@ -15,14 +15,18 @@ import (
 // of shelling out to `brew update`.
 
 var (
-	sharedIndexOnce  sync.Once
-	sharedIndexStore *index.Store
-	indexDisabled    bool // tests only — forces the index unavailable
+	sharedIndexOnce   sync.Once
+	sharedIndexStore  *index.Store
+	indexDisabled     bool         // tests only — forces the index unavailable
+	testIndexOverride *index.Store // tests only — injects a fixture index
 )
 
 // sharedIndex lazily opens the process-wide native index. A nil return means
 // the index couldn't be opened; callers degrade gracefully.
 func sharedIndex() *index.Store {
+	if testIndexOverride != nil {
+		return testIndexOverride
+	}
 	if indexDisabled {
 		return nil
 	}
@@ -146,6 +150,25 @@ func leavesNative(st *index.Store) []backend.Package {
 	}
 	sortPackagesByName(out)
 	return out
+}
+
+// hasHostBottle reports whether the formula has a bottle for any of the host's
+// preferred tags — i.e. it's installable via the native path on this machine.
+func hasHostBottle(st *index.Store, name string) bool {
+	bs, err := st.Bottles(name)
+	if err != nil || len(bs) == 0 {
+		return false
+	}
+	have := make(map[string]bool, len(bs))
+	for _, b := range bs {
+		have[b.Tag] = true
+	}
+	for _, tag := range BottleTagPreference() {
+		if have[tag] {
+			return true
+		}
+	}
+	return false
 }
 
 // indexFormulaToPackage adapts an index Formula to a backend.Package.
