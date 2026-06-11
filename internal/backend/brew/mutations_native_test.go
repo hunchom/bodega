@@ -2,13 +2,60 @@ package brew
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hunchom/bodega/internal/index"
 )
+
+// pinCapturePW captures progress output for assertions.
+type pinCapturePW struct{ buf strings.Builder }
+
+func (p *pinCapturePW) Write(b []byte) (int, error) { return p.buf.Write(b) }
+func (p *pinCapturePW) Step(string)                 {}
+
+// pinFailDoer fails every request so a test that should make no network call
+// surfaces a fast error instead of hanging if the no-call assumption breaks.
+type pinFailDoer struct{}
+
+func (pinFailDoer) Do(*http.Request) (*http.Response, error) {
+	return nil, errors.New("network disabled in test")
+}
+
+// TestUpgradeSkipsExplicitlyNamedPinned: `yum upgrade <pinned>` must honor the
+// pin even when the formula is named, never installing a new version.
+func TestUpgradeSkipsExplicitlyNamedPinned(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	prefix := t.TempDir()
+	installWithStubbedPrefix(t, prefix)
+
+	pinnedDir := filepath.Join(prefix, "var", "homebrew", "pinned")
+	if err := os.MkdirAll(pinnedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pinnedDir, "foo"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixtureIndex(t, `[{"name":"foo","versions":{"stable":"2.0"},"bottle":{"stable":{"files":{"all":{"url":"https://ghcr/foo","sha256":"aa"}}}}}]`)
+
+	prev := httpClient
+	httpClient = pinFailDoer{}
+	t.Cleanup(func() { httpClient = prev })
+
+	pw := &pinCapturePW{}
+	b := &Brew{}
+	if err := b.Upgrade(context.Background(), []string{"foo"}, pw); err != nil {
+		t.Fatalf("pinned formula must be skipped, not installed; got err: %v", err)
+	}
+	if !strings.Contains(pw.buf.String(), "skipping pinned foo") {
+		t.Fatalf("want 'skipping pinned foo', got %q", pw.buf.String())
+	}
+}
 
 // fixtureIndex builds an in-temp index from a formula JSON payload and installs
 // it as the process-wide override for the test's duration.

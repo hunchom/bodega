@@ -43,7 +43,7 @@ func ParseRuntimeDeps(prefix, name string) ([]string, bool, error) {
 		if !v.IsDir() || strings.HasPrefix(n, ".") {
 			continue
 		}
-		if n > best {
+		if best == "" || compareKegVersions(n, best) > 0 {
 			best = n
 		}
 	}

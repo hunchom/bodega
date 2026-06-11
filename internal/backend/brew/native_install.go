@@ -281,6 +281,13 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 			continue
 		}
 
+		// Upgrade (Overwrite): drop prefix symlinks left by older versions of
+		// this keg — files renamed/removed in the new version would otherwise
+		// dangle once Cleanup prunes the old keg.
+		if opts.Overwrite {
+			pruneStaleVersionLinks(prefix, cellarRoot, p.Name, filepath.Base(root))
+		}
+
 		result.Installed = append(result.Installed, InstalledPackage{
 			Name:        p.Name,
 			Version:     p.Version,
@@ -304,6 +311,27 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 		return result, errors.Join(failErrs...)
 	}
 	return result, nil
+}
+
+// pruneStaleVersionLinks removes prefix symlinks still pointing into versions of
+// name other than keepVersion — the dangling links a freshly-linked upgrade keg
+// didn't overwrite. The old keg dir itself is left for Cleanup; only its now-
+// orphaned prefix links are swept.
+func pruneStaleVersionLinks(prefix, cellarRoot, name, keepVersion string) {
+	pkgDir := filepath.Join(cellarRoot, name)
+	var oldPaths []string
+	for _, v := range versionDirs(pkgDir) {
+		if v == keepVersion {
+			continue
+		}
+		oldPaths = append(oldPaths, filepath.Join(pkgDir, v))
+	}
+	if len(oldPaths) == 0 {
+		return
+	}
+	if syms, err := collectSymlinks(prefix, oldPaths); err == nil {
+		_ = Unlink(syms)
+	}
 }
 
 // downloadResult is one entry in the parallel fetch map. A nil err with an

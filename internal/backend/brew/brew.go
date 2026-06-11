@@ -667,7 +667,9 @@ func listTaps() ([]string, bool) {
 // isn't discoverable.
 func (b *Brew) Pin(ctx context.Context, name string, pin bool) error {
 	prefix := brewPrefix()
-	if prefix == "" {
+	// Route unsafe / tap-qualified names to brew before building any path — a
+	// raw `..` would otherwise let unpin's os.Remove escape the pinned dir.
+	if prefix == "" || !isSafeKegName(name) {
 		return b.pinBrew(ctx, name, pin)
 	}
 	link := prefix + "/var/homebrew/pinned/" + name
@@ -934,8 +936,15 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	}
 
 	var native, viaBrew []string
+	pinned := pinnedSet()
 	if len(names) > 0 {
 		for _, n := range names {
+			// A pin is a "never move this version" contract — honor it even
+			// when the formula is named explicitly, matching `brew upgrade`.
+			if pinned[n] {
+				fwd(w, "skipping pinned "+n)
+				continue
+			}
 			if hasHostBottle(st, n) {
 				native = append(native, n)
 			} else {
@@ -947,7 +956,6 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 		if err != nil {
 			return err
 		}
-		pinned := pinnedSet()
 		for _, p := range outdated {
 			switch {
 			case p.Source == backend.SrcCask:

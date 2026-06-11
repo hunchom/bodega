@@ -355,3 +355,48 @@ func TestCachedBottleMatches(t *testing.T) {
 		t.Fatal("expected cache miss on missing file")
 	}
 }
+
+// TestPruneStaleVersionLinks: after an upgrade links the new keg, prefix links
+// that still point into an OLD version (files dropped/renamed in the new
+// version) must be removed; links pointing into the kept version survive.
+func TestPruneStaleVersionLinks(t *testing.T) {
+	prefix := t.TempDir()
+	cellarRoot := filepath.Join(prefix, "Cellar")
+	mk := func(p, body string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Old keg 1.0 has oldonly + shared; new keg 2.0 has only shared.
+	mk(filepath.Join(cellarRoot, "foo", "1.0", "bin", "oldonly"), "old")
+	mk(filepath.Join(cellarRoot, "foo", "1.0", "bin", "shared"), "old")
+	mk(filepath.Join(cellarRoot, "foo", "2.0", "bin", "shared"), "new")
+
+	binDir := filepath.Join(prefix, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// shared link already repointed to new keg by Link; oldonly still dangles
+	// into the old keg.
+	rel := func(to string) string { r, _ := filepath.Rel(binDir, to); return r }
+	if err := os.Symlink(rel(filepath.Join(cellarRoot, "foo", "2.0", "bin", "shared")), filepath.Join(binDir, "shared")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rel(filepath.Join(cellarRoot, "foo", "1.0", "bin", "oldonly")), filepath.Join(binDir, "oldonly")); err != nil {
+		t.Fatal(err)
+	}
+
+	pruneStaleVersionLinks(prefix, cellarRoot, "foo", "2.0")
+
+	// old-exclusive link gone
+	if _, err := os.Lstat(filepath.Join(binDir, "oldonly")); !os.IsNotExist(err) {
+		t.Fatalf("stale oldonly link survived: %v", err)
+	}
+	// new-version link untouched
+	if _, err := os.Lstat(filepath.Join(binDir, "shared")); err != nil {
+		t.Fatalf("shared link wrongly removed: %v", err)
+	}
+}

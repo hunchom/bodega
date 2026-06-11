@@ -213,11 +213,11 @@ func fetchToken(ctx context.Context, formula string) (string, error) {
 // caller can invalidate the cached token and retry exactly once.
 var errUnauthorized = errors.New("ghcr: unauthorized")
 
-// fetchBlob issues the authenticated GET against the bottle URL and returns
-// the open response. The caller is responsible for closing Body. We follow
-// redirects (GHCR 302s to a signed CDN URL); the stdlib client's default
-// CheckRedirect preserves our Authorization header only to the same host,
-// so we re-send it explicitly via a custom CheckRedirect.
+// fetchBlob issues the authenticated GET against the bottle URL and returns the
+// open response. The caller closes Body. GHCR 302s to a signed CDN URL; the
+// stdlib client's default CheckRedirect DROPS the Authorization header on the
+// cross-host hop — correct here, since the CDN URL is pre-signed and re-sending
+// the bearer would leak it to the CDN.
 func fetchBlob(ctx context.Context, bottleURL, token string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, bottleURL, nil)
 	if err != nil {
