@@ -416,10 +416,9 @@ func listPinned() ([]backend.Package, bool) {
 	return pkgs, true
 }
 
-// latestVersionDir picks the lexicographically largest non-dot entry under a
-// formula/cask install dir. `brew list --versions` joins every installed
-// version with a space; we approximate that by picking one, which matches
-// the common case of a single installed version.
+// latestVersionDir picks the newest non-dot keg under a formula/cask install
+// dir using Homebrew version ordering (so 1.10 beats 1.9 and 1.2.3_1 beats
+// 1.2.3), matching the common case of a single installed version.
 func latestVersionDir(dir string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -431,7 +430,7 @@ func latestVersionDir(dir string) string {
 		if n == "" || strings.HasPrefix(n, ".") {
 			continue
 		}
-		if n > best {
+		if best == "" || compareKegVersions(n, best) > 0 {
 			best = n
 		}
 	}

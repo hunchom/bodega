@@ -41,6 +41,74 @@ func symlinkOpt(t *testing.T, prefix, pkg, version string) {
 	}
 }
 
+func TestCompareKegVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int // -1 a older, +1 a newer, 0 equal
+	}{
+		{"1.9", "1.10", -1},      // numeric, not lexical
+		{"1.10", "1.9", 1},       //
+		{"1.2.3", "1.2.3_1", -1}, // revision bump is newer
+		{"1.2.3_1", "1.2.3", 1},  //
+		{"1.2.3_2", "1.2.3_1", 1},
+		{"1.2", "1.2.0", 0},              // trailing zero
+		{"1.2.3", "1.2.3", 0},            // equal
+		{"1.2.3-beta", "1.2.3", -1},      // semver prerelease sorts below release
+		{"2024-01-15", "2024-02-01", -1}, // date-ish, lexical fallback
+		{"3.0.0", "3.0.0_2", -1},
+	}
+	for _, c := range cases {
+		if got := compareKegVersions(c.a, c.b); sign(got) != c.want {
+			t.Errorf("compareKegVersions(%q,%q)=%d want sign %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func sign(n int) int {
+	switch {
+	case n < 0:
+		return -1
+	case n > 0:
+		return 1
+	}
+	return 0
+}
+
+func TestSortVersionsRevisionAware(t *testing.T) {
+	vs := []string{"1.10.0", "1.2.3_1", "1.9.0", "1.2.3"}
+	sortVersions(vs)
+	// oldest->newest: 1.2.3 < 1.2.3_1 (revision) < 1.9.0 < 1.10.0 (numeric).
+	want := []string{"1.2.3", "1.2.3_1", "1.9.0", "1.10.0"}
+	if !reflect.DeepEqual(vs, want) {
+		t.Fatalf("sorted=%v want=%v", vs, want)
+	}
+}
+
+// TestPruneKeepsNewestRevisionFallback: with a revision duplicate and NO opt
+// link, Cleanup's fallback (newest per sortVersions) must keep 1.2.3_1, not the
+// older 1.2.3.
+func TestPruneKeepsNewestRevisionFallback(t *testing.T) {
+	prefix := fakePrefix(t, map[string][]string{"foo": {"1.2.3", "1.2.3_1"}})
+	dups, err := FindDuplicates(nil)
+	if err != nil || len(dups) != 1 {
+		t.Fatalf("FindDuplicates: dups=%v err=%v", dups, err)
+	}
+	keep := dups[0].Versions[len(dups[0].Versions)-1] // Cleanup's no-opt-link fallback
+	if keep != "1.2.3_1" {
+		t.Fatalf("fallback keep=%q want 1.2.3_1", keep)
+	}
+	removed, err := PruneDuplicate(dups[0], keep)
+	if err != nil {
+		t.Fatalf("PruneDuplicate: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "1.2.3" {
+		t.Fatalf("removed=%v want [1.2.3]", removed)
+	}
+	if _, err := os.Stat(filepath.Join(prefix, "Cellar", "foo", "1.2.3_1")); err != nil {
+		t.Fatalf("newer revision wrongly pruned: %v", err)
+	}
+}
+
 func TestFindDuplicates_TwoVersions(t *testing.T) {
 	prefix := fakePrefix(t, map[string][]string{
 		"hello": {"2.12.0", "2.12.3"},
@@ -113,7 +181,8 @@ func TestFindDuplicates_NoDuplicates(t *testing.T) {
 
 func TestFindDuplicates_NonSemverFallback(t *testing.T) {
 	fakePrefix(t, map[string][]string{
-		// Homebrew revision suffix like 3.0.0_1 fails strict semver parsing.
+		// Homebrew revision suffix: 3.0.0_1 is a revision bump of 3.0.0 and must
+		// sort as the newer keg even though _1 isn't valid semver.
 		"legacy": {"3.0.0_1", "3.0.0"},
 	})
 	got, err := FindDuplicates(nil)
@@ -123,10 +192,9 @@ func TestFindDuplicates_NonSemverFallback(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1, got %+v", got)
 	}
-	// "3.0.0" parses as semver; "3.0.0_1" does not. Non-parseable sorts first,
-	// so the tail must be the semver-valid entry.
-	if got[0].Versions[len(got[0].Versions)-1] != "3.0.0" {
-		t.Fatalf("versions=%v", got[0].Versions)
+	// Newest (tail) must be the revision bump.
+	if got[0].Versions[len(got[0].Versions)-1] != "3.0.0_1" {
+		t.Fatalf("versions=%v want tail 3.0.0_1", got[0].Versions)
 	}
 }
 

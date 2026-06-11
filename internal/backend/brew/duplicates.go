@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -137,25 +138,96 @@ func versionDirs(pkgDir string) []string {
 	return out
 }
 
-// sortVersions sorts in place, oldest first. Strings that parse as semver
-// compare by semver; unparseable versions fall back to lexicographic order
-// against each other, and sort before semver-parseable ones so the newest
-// semver-valid entry still lands at the tail.
+// sortVersions sorts in place, oldest first, the Homebrew way — so the newest
+// keg lands at the tail and Cleanup keeps it.
 func sortVersions(vs []string) {
 	sort.SliceStable(vs, func(i, j int) bool {
-		vi, ei := semver.NewVersion(vs[i])
-		vj, ej := semver.NewVersion(vs[j])
-		switch {
-		case ei == nil && ej == nil:
-			return vi.LessThan(vj)
-		case ei == nil && ej != nil:
-			return false
-		case ei != nil && ej == nil:
-			return true
-		default:
-			return vs[i] < vs[j]
-		}
+		return compareKegVersions(vs[i], vs[j]) < 0
 	})
+}
+
+// compareKegVersions orders two Cellar version-dir names the Homebrew way for
+// the cases that matter: the optional _<revision> suffix is split off as a
+// tiebreaker, and the base is compared via semver (so 1.10 > 1.9, and
+// prereleases sort below their release) with a numeric-token fallback for
+// non-semver strings (dates, p-levels, two-part versions). Returns -1 if a is
+// older, +1 if newer, 0 if equal.
+func compareKegVersions(a, b string) int {
+	ab, ar := splitRevision(a)
+	bb, br := splitRevision(b)
+	if c := compareVersionBase(ab, bb); c != 0 {
+		return c
+	}
+	switch {
+	case ar < br:
+		return -1
+	case ar > br:
+		return 1
+	}
+	return 0
+}
+
+// splitRevision peels a trailing _<n> Homebrew revision off v. A revision is a
+// real bump (1.2.3_1 is newer than 1.2.3) but isn't valid semver, so it has to
+// come off before the base comparison.
+func splitRevision(v string) (base string, rev int) {
+	if i := strings.LastIndexByte(v, '_'); i > 0 {
+		if n, err := strconv.Atoi(v[i+1:]); err == nil {
+			return v[:i], n
+		}
+	}
+	return v, 0
+}
+
+// compareVersionBase compares two revision-stripped versions. Both-semver →
+// semver compare; otherwise numeric per dotted component so 1.10 > 1.9 and
+// 1.2 == 1.2.0.
+func compareVersionBase(a, b string) int {
+	if va, ea := semver.NewVersion(a); ea == nil {
+		if vb, eb := semver.NewVersion(b); eb == nil {
+			return va.Compare(vb)
+		}
+	}
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	n := max(len(as), len(bs))
+	for i := range n {
+		at, bt := "0", "0"
+		if i < len(as) {
+			at = as[i]
+		}
+		if i < len(bs) {
+			bt = bs[i]
+		}
+		if c := compareVersionToken(at, bt); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+// compareVersionToken compares one dotted component: numeric when both parse as
+// ints (1.10 > 1.9), else lexical.
+func compareVersionToken(a, b string) int {
+	an, ae := strconv.Atoi(a)
+	bn, be := strconv.Atoi(b)
+	if ae == nil && be == nil {
+		switch {
+		case an < bn:
+			return -1
+		case an > bn:
+			return 1
+		default:
+			return 0
+		}
+	}
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // linkedVersion resolves $PREFIX/opt/<name> and returns the final path
