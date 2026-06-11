@@ -34,8 +34,10 @@ export function registerLog(server: McpServer, runner: Runner): void {
     async ({ package: pkg, limit }) =>
       safeHandler(
         () => {
-          const args = ["log", pkg];
+          // Flags before the `--` terminator; pkg as a guarded positional.
+          const args = ["log"];
           if (limit && limit > 0) args.push("--limit", String(limit));
+          args.push("--", pkg);
           return runYumJSON<unknown[]>(runner, args);
         },
         (events) => jsonResult({ events: events ?? [] }),

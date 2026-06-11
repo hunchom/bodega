@@ -37,7 +37,7 @@ export function registerUpgrade(server: McpServer, runner: Runner): void {
       safeHandler(
         () => {
           const args = ["upgrade", "-y"];
-          if (packages && packages.length > 0) args.push(...packages);
+          if (packages && packages.length > 0) args.push("--", ...packages);
           return runYumJSON<UpgradeResponse>(runner, args);
         },
         (payload) =>

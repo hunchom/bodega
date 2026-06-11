@@ -33,7 +33,8 @@ export function registerRemove(server: McpServer, runner: Runner): void {
     },
     async ({ packages }) =>
       safeHandler(
-        () => runYumJSON<RemoveResponse>(runner, ["remove", "-y", ...packages]),
+        () =>
+          runYumJSON<RemoveResponse>(runner, ["remove", "-y", "--", ...packages]),
         (payload) =>
           jsonResult({
             removed: payload?.removed ?? packages,

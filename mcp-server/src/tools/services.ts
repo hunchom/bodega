@@ -45,7 +45,7 @@ export function registerServices(server: McpServer, runner: Runner): void {
             );
           }
           const args = ["services", verb];
-          if (name) args.push(name);
+          if (name) args.push("--", name);
           return runYumJSON<unknown>(runner, args);
         },
         (data) => jsonResult({ result: data ?? null }),

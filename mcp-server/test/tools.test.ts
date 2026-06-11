@@ -129,6 +129,7 @@ test("yum_search invokes yum with correct args and returns results", async () =>
       "--name-only",
       "--limit",
       "5",
+      "--",
       "ripgrep",
     ]);
     return ok([{ name: "ripgrep", desc: "recursive grep" }]);
@@ -149,7 +150,7 @@ test("yum_search invokes yum with correct args and returns results", async () =>
 
 test("yum_install passes packages verbatim and surfaces JSON response", async () => {
   const runner = new FakeRunner((args) => {
-    assert.deepEqual(args, ["--json", "install", "-y", "git", "jq"]);
+    assert.deepEqual(args, ["--json", "install", "-y", "--", "git", "jq"]);
     return ok({ installed: ["git", "jq"], failed: [] });
   });
   const { client, close } = await withClient(runner);
@@ -189,7 +190,7 @@ test("yum_list normalizes 'outdated' -> 'updates' subcommand", async () => {
 
 test("yum_remove passes packages without the dropped --force flag", async () => {
   const runner = new FakeRunner((args) => {
-    assert.deepEqual(args, ["--json", "remove", "-y", "openssl"]);
+    assert.deepEqual(args, ["--json", "remove", "-y", "--", "openssl"]);
     return ok({ removed: ["openssl"], failed: [] });
   });
   const { client, close } = await withClient(runner);

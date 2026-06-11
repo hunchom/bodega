@@ -50,7 +50,7 @@ export function registerSearch(server: McpServer, runner: Runner): void {
           if (deps) args.push("--deps");
           if (name_only) args.push("--name-only");
           if (limit && limit > 0) args.push("--limit", String(limit));
-          args.push(query);
+          args.push("--", query);
           return runYumJSON<unknown[]>(runner, args);
         },
         (results) => jsonResult({ results: results ?? [] }),

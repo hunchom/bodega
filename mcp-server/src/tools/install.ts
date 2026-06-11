@@ -36,7 +36,12 @@ export function registerInstall(server: McpServer, runner: Runner): void {
     async ({ packages }) =>
       safeHandler(
         () =>
-          runYumJSON<InstallResponse>(runner, ["install", "-y", ...packages]),
+          runYumJSON<InstallResponse>(runner, [
+            "install",
+            "-y",
+            "--",
+            ...packages,
+          ]),
         (payload) =>
           jsonResult({
             installed: payload?.installed ?? packages,

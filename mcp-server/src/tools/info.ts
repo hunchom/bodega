@@ -27,7 +27,7 @@ export function registerInfo(server: McpServer, runner: Runner): void {
     },
     async ({ package: pkg }) =>
       safeHandler(
-        () => runYumJSON<unknown>(runner, ["info", pkg]),
+        () => runYumJSON<unknown>(runner, ["info", "--", pkg]),
         (data) => jsonResult({ package: data ?? null }),
       ),
   );
