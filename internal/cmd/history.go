@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hunchom/bodega/internal/journal"
 	"github.com/hunchom/bodega/internal/ui"
 	"github.com/hunchom/bodega/internal/ui/theme"
 )
@@ -33,6 +34,9 @@ func newHistoryCmd() *cobra.Command {
 				return err
 			}
 			if app.W.JSON {
+				if txs == nil {
+					txs = []journal.Transaction{} // emit [] not null for jq consumers
+				}
 				return app.W.Print(txs)
 			}
 			if len(txs) == 0 {

@@ -22,7 +22,7 @@ export function registerLogResource(server: McpServer, runner: Runner): void {
           `yum://log/{name} requires a package name, got ${uri.href}`,
         );
       }
-      const events = await runYumJSON<unknown[]>(runner, ["log", pkg]);
+      const events = await runYumJSON<unknown[]>(runner, ["log", "--", pkg]);
       return {
         contents: [
           {

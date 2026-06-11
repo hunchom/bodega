@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hunchom/bodega/internal/journal"
 	"github.com/hunchom/bodega/internal/ui"
 	"github.com/hunchom/bodega/internal/ui/theme"
 )
@@ -26,11 +27,19 @@ func newLogCmd() *cobra.Command {
 				return err
 			}
 			name := args[0]
+			// limit<=0 means "all" (negative LIMIT is unbounded in SQLite) —
+			// not "zero rows", which is the surprising raw behavior.
+			if limit <= 0 {
+				limit = -1
+			}
 			events, err := app.Journal.PackageLog(app.Ctx, name, limit)
 			if err != nil {
 				return err
 			}
 			if app.W.JSON {
+				if events == nil {
+					events = []journal.PackageEvent{}
+				}
 				return app.W.Print(events)
 			}
 			if len(events) == 0 {
@@ -54,7 +63,7 @@ func newLogCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().IntVar(&limit, "limit", 50, "max events to show")
+	c.Flags().IntVar(&limit, "limit", 50, "max events to show (0 = all)")
 	return c
 }
 

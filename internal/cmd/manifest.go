@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/backend/brew"
 	"github.com/hunchom/bodega/internal/journal"
 	"github.com/hunchom/bodega/internal/ui/theme"
 )
@@ -33,10 +37,24 @@ func newManifestCmd() *cobra.Command {
 			}
 			defer app.CloseJournal()
 
-			taps, _ := app.Registry.Primary().Taps(app.Ctx)
-			form, _ := app.Registry.Primary().List(app.Ctx, backend.ListInstalled)
-			casks, _ := app.Registry.Primary().List(app.Ctx, backend.ListCasks)
-			pins, _ := app.Registry.Primary().List(app.Ctx, backend.ListPinned)
+			// Propagate read errors — a backup that silently records an empty
+			// install set is worse than no backup.
+			taps, err := app.Registry.Primary().Taps(app.Ctx)
+			if err != nil {
+				return fmt.Errorf("manifest export: taps: %w", err)
+			}
+			form, err := app.Registry.Primary().List(app.Ctx, backend.ListInstalled)
+			if err != nil {
+				return fmt.Errorf("manifest export: formulae: %w", err)
+			}
+			casks, err := app.Registry.Primary().List(app.Ctx, backend.ListCasks)
+			if err != nil {
+				return fmt.Errorf("manifest export: casks: %w", err)
+			}
+			pins, err := app.Registry.Primary().List(app.Ctx, backend.ListPinned)
+			if err != nil {
+				return fmt.Errorf("manifest export: pinned: %w", err)
+			}
 
 			m := Manifest{
 				Generated: time.Now().UTC().Format(time.RFC3339),
@@ -104,6 +122,8 @@ func newManifestCmd() *cobra.Command {
 			if len(m.Formulae) > 0 {
 				app.W.Printf("%s installing %d formulae\n", theme.Muted.Render("→"), len(m.Formulae))
 				if err := app.Registry.Primary().Install(app.Ctx, m.Formulae, pw); err != nil {
+					// Journal whatever actually installed so undo can reverse it.
+					txPkgs = appendSucceeded(txPkgs, err, "formula")
 					_ = app.Journal.End(app.Ctx, txID, 1, txPkgs)
 					return err
 				}
@@ -114,6 +134,7 @@ func newManifestCmd() *cobra.Command {
 			if len(m.Casks) > 0 {
 				app.W.Printf("%s installing %d casks\n", theme.Muted.Render("→"), len(m.Casks))
 				if err := app.Registry.Primary().Install(app.Ctx, m.Casks, pw); err != nil {
+					txPkgs = appendSucceeded(txPkgs, err, "cask")
 					_ = app.Journal.End(app.Ctx, txID, 1, txPkgs)
 					return err
 				}
@@ -121,17 +142,40 @@ func newManifestCmd() *cobra.Command {
 					txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "cask", Action: "installed"})
 				}
 			}
+			var pinFailed []string
 			for _, p := range m.Pinned {
-				if err := app.Registry.Primary().Pin(app.Ctx, p, true); err == nil {
-					txPkgs = append(txPkgs, journal.TxPackage{Name: p, Source: "formula", Action: "pinned"})
+				if err := app.Registry.Primary().Pin(app.Ctx, p, true); err != nil {
+					pinFailed = append(pinFailed, p)
+					app.W.Errorf("%s pin %s: %v\n", theme.Err.Render("✗"), p, err)
+					continue
 				}
+				txPkgs = append(txPkgs, journal.TxPackage{Name: p, Source: "formula", Action: "pinned"})
 			}
-			if err := app.Journal.End(app.Ctx, txID, 0, txPkgs); err != nil {
+			exit := 0
+			if len(pinFailed) > 0 {
+				exit = 1
+			}
+			if err := app.Journal.End(app.Ctx, txID, exit, txPkgs); err != nil {
 				return err
+			}
+			if len(pinFailed) > 0 {
+				return fmt.Errorf("manifest: %d pin(s) failed: %s", len(pinFailed), strings.Join(pinFailed, ", "))
 			}
 			app.W.Printf("%s %s\n", theme.OK.Render("✓"), "manifest applied")
 			return nil
 		},
 	})
 	return c
+}
+
+// appendSucceeded records the packages a partially-failed batch Install did land
+// (from *brew.PartialError) so `history undo` can reverse them.
+func appendSucceeded(txPkgs []journal.TxPackage, err error, source string) []journal.TxPackage {
+	var pe *brew.PartialError
+	if errors.As(err, &pe) {
+		for _, n := range pe.Succeeded {
+			txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: source, Action: "installed"})
+		}
+	}
+	return txPkgs
 }

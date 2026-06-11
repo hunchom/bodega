@@ -198,9 +198,15 @@ func renderFlatSearch(app *AppCtx, pkgs []backend.Package, install bool) error {
 	return runInstall(app, []string{sel})
 }
 
+// truncate caps s to n runes (not bytes) so a multibyte glyph never gets cut in
+// half, appending an ellipsis when it shortens.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }

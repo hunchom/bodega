@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -28,9 +29,13 @@ func newRollbackCmd() *cobra.Command {
 
 			var id int64
 			if len(args) == 1 {
-				if _, err := fmt.Sscan(args[0], &id); err != nil {
-					return err
+				// strconv (not fmt.Sscan) so "0x10"/"5x"/"3 4" are rejected — a
+				// rollback acting on a different tx than typed is destructive.
+				n, err := strconv.ParseInt(args[0], 10, 64)
+				if err != nil {
+					return fmt.Errorf("rollback: invalid transaction id %q", args[0])
 				}
+				id = n
 			} else {
 				txs, err := app.Journal.Recent(app.Ctx, 1)
 				if err != nil {

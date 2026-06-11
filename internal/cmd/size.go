@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -43,6 +44,11 @@ func newSizeCmd() *cobra.Command {
 					continue
 				}
 				targets = append(targets, p)
+			}
+			// A named package that isn't installed is an error, not a silent
+			// "0 bytes" — scripts must be able to tell the two apart.
+			if len(args) == 1 && len(targets) == 0 {
+				return fmt.Errorf("size: %s is not installed", args[0])
 			}
 
 			// Parallel walk: dirSize is almost pure stat-bound I/O, so we

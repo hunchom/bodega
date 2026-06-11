@@ -66,7 +66,7 @@ export function registerInstalledResources(
           `yum://installed/{name} requires a package name, got ${uri.href}`,
         );
       }
-      const data = await runYumJSON<unknown>(runner, ["info", pkg]);
+      const data = await runYumJSON<unknown>(runner, ["info", "--", pkg]);
       return {
         contents: [
           {
