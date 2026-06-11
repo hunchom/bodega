@@ -57,7 +57,9 @@ type Backend interface {
 	Install(ctx context.Context, names []string, w ProgressWriter) error
 	Remove(ctx context.Context, names []string, w ProgressWriter) error
 	Reinstall(ctx context.Context, names []string, w ProgressWriter) error
-	Upgrade(ctx context.Context, names []string, w ProgressWriter) error
+	// Upgrade returns the names actually upgraded (so a no-arg bulk upgrade,
+	// which resolves its own set, can be journaled accurately).
+	Upgrade(ctx context.Context, names []string, w ProgressWriter) ([]string, error)
 	Outdated(ctx context.Context) ([]Package, error)
 	Deps(ctx context.Context, name string) (*DepTree, error)
 	ReverseDeps(ctx context.Context, name string) ([]string, error)

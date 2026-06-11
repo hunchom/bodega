@@ -422,7 +422,7 @@ func (m *model) startMutationCmd(act Action, name string) tea.Cmd {
 			err = reg.Primary().Reinstall(ctx, []string{name}, pw)
 			action = "reinstalled"
 		case ActUpgrade:
-			err = reg.Primary().Upgrade(ctx, []string{name}, pw)
+			_, err = reg.Primary().Upgrade(ctx, []string{name}, pw)
 			action = "upgraded"
 		}
 		// Journal the transaction if we have one. Best-effort — journal

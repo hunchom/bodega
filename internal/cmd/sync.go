@@ -70,7 +70,7 @@ func newSyncCmd() *cobra.Command {
 				fn    func() error
 			}
 			steps := []syncStep{
-				{"upgrade", func() error { return app.Registry.Primary().Upgrade(app.Ctx, nil, upgradePW) }},
+				{"upgrade", func() error { _, err := app.Registry.Primary().Upgrade(app.Ctx, nil, upgradePW); return err }},
 				{"autoremove", func() error { return app.Registry.Primary().Autoremove(app.Ctx, autoPW) }},
 			}
 			// cleanup is gated by the auto_cleanup config (default true).

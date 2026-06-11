@@ -787,6 +787,17 @@ func linesToPkgs(b []byte, src backend.Source) []backend.Package {
 	return pkgs
 }
 
+// brewArgs builds a `brew <sub> [-- <names...>]` argv. The `--` guard is added
+// only when names are present so a `-`-leading formula name can't be parsed as a
+// brew flag, while a no-name call (e.g. `brew upgrade` = upgrade-all) is left
+// untouched. brew honors `--` as the end-of-options terminator.
+func brewArgs(sub string, names []string) []string {
+	if len(names) == 0 {
+		return []string{sub}
+	}
+	return append([]string{sub, "--"}, names...)
+}
+
 func (b *Brew) stream(ctx context.Context, w backend.ProgressWriter, args ...string) error {
 	var sink io.Writer = io.Discard
 	if w != nil {
@@ -838,7 +849,7 @@ func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWr
 		}
 		return err
 	}
-	if err := b.stream(ctx, w, append([]string{"install"}, names...)...); err != nil {
+	if err := b.stream(ctx, w, brewArgs("install", names)...); err != nil {
 		return err
 	}
 	invalidateCache(names)
@@ -887,7 +898,7 @@ func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWri
 		}
 		return err
 	}
-	if err := b.stream(ctx, w, append([]string{"uninstall"}, names...)...); err != nil {
+	if err := b.stream(ctx, w, brewArgs("uninstall", names)...); err != nil {
 		return err
 	}
 	invalidateCache(names)
@@ -902,7 +913,7 @@ func (b *Brew) Reinstall(ctx context.Context, names []string, w backend.Progress
 		Progress: func(ev UninstallEvent) { fwd(w, ev.Message) },
 	})
 	if errors.Is(uerr, ErrNativeUnsupported) {
-		if err := b.stream(ctx, w, append([]string{"reinstall"}, names...)...); err != nil {
+		if err := b.stream(ctx, w, brewArgs("reinstall", names)...); err != nil {
 			return err
 		}
 		invalidateCache(names)
@@ -929,10 +940,13 @@ func fwd(w backend.ProgressWriter, msg string) {
 // and the prefix symlinks to the new keg) and routes casks, source-only
 // formulae, and cold-index cases to brew so coverage never regresses. Pinned
 // formulae are skipped in an upgrade-all. The old keg is left for Cleanup.
-func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWriter) error {
+func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWriter) ([]string, error) {
 	st := readyIndex(ctx)
 	if st == nil {
-		return b.upgradeBrew(ctx, w, names)
+		if err := b.upgradeBrew(ctx, w, names); err != nil {
+			return nil, err
+		}
+		return names, nil
 	}
 
 	var native, viaBrew []string
@@ -954,7 +968,7 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	} else {
 		outdated, err := b.Outdated(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, p := range outdated {
 			switch {
@@ -977,23 +991,28 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 		})
 		if err != nil {
 			if !errors.Is(err, ErrNativeUnsupported) {
-				return err
+				return nil, err
 			}
 			viaBrew = append(viaBrew, native...) // native unsupported → brew
+			native = nil                         // folded into the brew set
 		} else {
 			invalidateCache(native)
 		}
 	}
 	if len(viaBrew) > 0 {
 		if err := b.upgradeBrew(ctx, w, viaBrew); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+
+	// The set actually acted on (pinned/skipped excluded), for the journal.
+	upgraded := append(append([]string{}, native...), viaBrew...)
+	sort.Strings(upgraded)
+	return upgraded, nil
 }
 
 func (b *Brew) upgradeBrew(ctx context.Context, w backend.ProgressWriter, names []string) error {
-	if err := b.stream(ctx, w, append([]string{"upgrade"}, names...)...); err != nil {
+	if err := b.stream(ctx, w, brewArgs("upgrade", names)...); err != nil {
 		return err
 	}
 	invalidateCache(names)

@@ -11,7 +11,27 @@ import (
 	"time"
 
 	"github.com/hunchom/bodega/internal/index"
+	"github.com/hunchom/bodega/internal/runner"
 )
+
+// TestUpgradeReturnsUpgradedNames: Upgrade reports the set it acted on so a
+// no-arg bulk upgrade can be journaled. A source-only formula routes to brew
+// (fake runner) and comes back in the returned slice.
+func TestUpgradeReturnsUpgradedNames(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	prefix := t.TempDir()
+	installWithStubbedPrefix(t, prefix)
+	fixtureIndex(t, `[{"name":"foo","versions":{"stable":"2.0"}}]`) // no bottle → via brew
+
+	b := &Brew{R: &runner.Fake{}} // exit 0 for "brew upgrade -- foo"
+	upgraded, err := b.Upgrade(context.Background(), []string{"foo"}, nil)
+	if err != nil {
+		t.Fatalf("Upgrade: %v", err)
+	}
+	if len(upgraded) != 1 || upgraded[0] != "foo" {
+		t.Fatalf("upgraded=%v want [foo]", upgraded)
+	}
+}
 
 // pinCapturePW captures progress output for assertions.
 type pinCapturePW struct{ buf strings.Builder }
@@ -49,7 +69,7 @@ func TestUpgradeSkipsExplicitlyNamedPinned(t *testing.T) {
 
 	pw := &pinCapturePW{}
 	b := &Brew{}
-	if err := b.Upgrade(context.Background(), []string{"foo"}, pw); err != nil {
+	if _, err := b.Upgrade(context.Background(), []string{"foo"}, pw); err != nil {
 		t.Fatalf("pinned formula must be skipped, not installed; got err: %v", err)
 	}
 	if !strings.Contains(pw.buf.String(), "skipping pinned foo") {

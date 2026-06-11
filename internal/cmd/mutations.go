@@ -27,8 +27,8 @@ func newRemoveCmd() *cobra.Command {
 				return err
 			}
 			defer app.CloseJournal()
-			return runMutate(app, "remove", args, func(names []string, pw backend.ProgressWriter) error {
-				return app.Registry.Primary().Remove(app.Ctx, names, pw)
+			return runMutate(app, "remove", args, func(names []string, pw backend.ProgressWriter) ([]string, error) {
+				return names, app.Registry.Primary().Remove(app.Ctx, names, pw)
 			}, "removed", false)
 		},
 	}
@@ -46,8 +46,8 @@ func newReinstallCmd() *cobra.Command {
 				return err
 			}
 			defer app.CloseJournal()
-			return runMutate(app, "reinstall", args, func(names []string, pw backend.ProgressWriter) error {
-				return app.Registry.Primary().Reinstall(app.Ctx, names, pw)
+			return runMutate(app, "reinstall", args, func(names []string, pw backend.ProgressWriter) ([]string, error) {
+				return names, app.Registry.Primary().Reinstall(app.Ctx, names, pw)
 			}, "reinstalled", true)
 		},
 	}
@@ -65,7 +65,7 @@ func newUpgradeCmd() *cobra.Command {
 			}
 			defer app.CloseJournal()
 			maybeRefreshTaps(app)
-			return runMutate(app, "upgrade", args, func(names []string, pw backend.ProgressWriter) error {
+			return runMutate(app, "upgrade", args, func(names []string, pw backend.ProgressWriter) ([]string, error) {
 				return app.Registry.Primary().Upgrade(app.Ctx, names, pw)
 			}, "upgraded", true)
 		},
@@ -195,7 +195,7 @@ func pluralize(word string, n int) string {
 // frozen; otherwise it's buffered and dumped on failure. A *brew.PartialError
 // from the doer is journaled package-by-package so partial on-disk changes stay
 // undoable via `yum history undo`.
-func runMutate(app *AppCtx, verb string, names []string, doer func([]string, backend.ProgressWriter) error, action string, live bool) error {
+func runMutate(app *AppCtx, verb string, names []string, doer func([]string, backend.ProgressWriter) ([]string, error), action string, live bool) error {
 	for _, n := range names {
 		if strings.TrimSpace(n) == "" {
 			return fmt.Errorf("%s: empty package name", verb)
@@ -226,7 +226,8 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 	var failed []map[string]string
 	var runErr error
 
-	if err := doer(names, pw); err != nil {
+	affected, err := doer(names, pw)
+	if err != nil {
 		exit = 1
 		runErr = err
 		// A partial failure carries the names that actually changed on disk —
@@ -264,7 +265,9 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 			}
 		}
 	} else {
-		for _, n := range names {
+		// Journal what was actually affected — for a no-arg bulk upgrade the
+		// backend resolves its own set, so `names` is empty but `affected` isn't.
+		for _, n := range affected {
 			txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "formula", Action: action})
 			if !app.W.JSON {
 				app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
@@ -277,7 +280,7 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 	if app.W.JSON {
 		succeededNames := []string{}
 		if exit == 0 {
-			succeededNames = names
+			succeededNames = affected
 		} else {
 			for _, p := range txPkgs {
 				succeededNames = append(succeededNames, p.Name)
