@@ -241,6 +241,48 @@ func TestUninstallNative_NotInstalled(t *testing.T) {
 	}
 }
 
+// TestUninstallNative_RejectsTraversal proves a crafted name can't escape the
+// Cellar and RemoveAll dirs outside it. A sentinel dir is planted next to the
+// prefix; `..`-style names must be skipped, never touched.
+func TestUninstallNative_RejectsTraversal(t *testing.T) {
+	base := t.TempDir()
+	prefix := filepath.Join(base, "homebrew")
+	if err := os.MkdirAll(filepath.Join(prefix, "Cellar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	uninstallWithStubbedPrefix(t, prefix)
+
+	// Sentinel that an escape would delete: $prefix/bin and a sibling outside.
+	planted := plantFormula(t, prefix, "keepme", "1.0.0", true)
+	sibling := filepath.Join(base, "victim", "data")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &Brew{}
+	bad := []string{"..", "../victim", "../../victim", "", "Cellar", "a/b"}
+	res, err := b.UninstallNative(context.Background(), bad, UninstallOpts{Force: true})
+	if err != nil {
+		t.Fatalf("UninstallNative: %v", err)
+	}
+	if len(res.Removed) != 0 {
+		t.Fatalf("Removed=%v, want none — traversal names must not delete anything", res.Removed)
+	}
+	if len(res.Skipped) != len(bad) {
+		t.Fatalf("Skipped=%v, want all %d unsafe names skipped", res.Skipped, len(bad))
+	}
+	// Sentinels intact.
+	if _, err := os.Stat(planted); err != nil {
+		t.Fatalf("planted keg deleted by traversal: %v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("sibling dir outside prefix deleted by traversal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(prefix, "bin")); err != nil {
+		t.Fatalf("prefix/bin deleted by `..` name: %v", err)
+	}
+}
+
 func TestUninstallNative_NoPrefix(t *testing.T) {
 	prev := disablePrefixCache
 	disablePrefixCache = true

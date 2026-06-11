@@ -228,7 +228,7 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 			Total:   -1,
 			Message: fmt.Sprintf("extracting %s %s", p.Name, p.Version),
 		})
-		root, err := Extract(ctx, d.path, cellarRoot)
+		root, err := Extract(ctx, d.path, cellarRoot, p.Name)
 		if err != nil {
 			result.Failed = append(result.Failed, FailedPackage{
 				Name: p.Name, Phase: "extract", Err: err,

@@ -182,7 +182,9 @@ func pickBottle(f *ResolvedFormula, prefs []string) (string, BottleFile, bool) {
 		return "", BottleFile{}, false
 	}
 	for _, tag := range prefs {
-		if bf, ok := f.Bottles[tag]; ok && bf.URL != "" {
+		// Require a digest too — an empty sha256 can't be integrity-checked, so
+		// skip the tag and let resolve fall through to ErrNoBottle.
+		if bf, ok := f.Bottles[tag]; ok && bf.URL != "" && bf.SHA256 != "" {
 			return tag, bf, true
 		}
 	}

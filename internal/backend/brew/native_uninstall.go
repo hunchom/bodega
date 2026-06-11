@@ -90,6 +90,13 @@ func (b *Brew) UninstallNative(ctx context.Context, names []string, opts Uninsta
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		// Reject path-y / tap-qualified names before they reach filepath.Join —
+		// a raw `..` or `a/b` would escape the Cellar and RemoveAll dirs outside
+		// it. Skip → caller falls back to the brew subprocess for odd names.
+		if !isSafeKegName(name) {
+			result.Skipped = append(result.Skipped, name)
+			continue
+		}
 		pkgDir := filepath.Join(cellarRoot, name)
 		versions := versionDirs(pkgDir)
 		emit(UninstallEvent{

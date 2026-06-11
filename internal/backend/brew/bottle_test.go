@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,7 +83,7 @@ func TestExtractProducesPkgVersionDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root, err := Extract(context.Background(), archive, extractDir)
+	root, err := Extract(context.Background(), archive, extractDir, "ripgrep")
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -96,9 +97,96 @@ func TestExtractProducesPkgVersionDir(t *testing.T) {
 }
 
 func TestExtractRejectsMissingDest(t *testing.T) {
-	_, err := Extract(context.Background(), "/nonexistent.tar.gz", "/definitely/does/not/exist/anywhere")
+	_, err := Extract(context.Background(), "/nonexistent.tar.gz", "/definitely/does/not/exist/anywhere", "foo")
 	if err == nil {
 		t.Fatal("expected error for missing destDir")
+	}
+}
+
+// TestExtractReinstallIntoExistingPkgDir is the upgrade/reinstall regression:
+// when Cellar/<name> already holds an old keg, extracting a new version used to
+// find no "new top-level dir" and error. Staging must make it succeed and leave
+// the old keg untouched.
+func TestExtractReinstallIntoExistingPkgDir(t *testing.T) {
+	cellar := t.TempDir()
+	// Pre-existing old keg: Cellar/foo/1.0.0/...
+	oldKeg := filepath.Join(cellar, "foo", "1.0.0", "bin")
+	if err := os.MkdirAll(oldKeg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldKeg, "foo"), []byte("old\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tarBytes := makeBottleTarGz(t, "foo", "2.0.0", map[string]string{"bin/foo": "new\n"})
+	archive := filepath.Join(t.TempDir(), "foo-2.0.0.tar.gz")
+	if err := os.WriteFile(archive, tarBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := Extract(context.Background(), archive, cellar, "foo")
+	if err != nil {
+		t.Fatalf("Extract into existing pkg dir: %v", err)
+	}
+	if want := filepath.Join(cellar, "foo", "2.0.0"); root != want {
+		t.Fatalf("root=%q want=%q", root, want)
+	}
+	// New keg present.
+	if _, err := os.Stat(filepath.Join(root, "bin", "foo")); err != nil {
+		t.Fatalf("new keg missing: %v", err)
+	}
+	// Old keg untouched.
+	if b, err := os.ReadFile(filepath.Join(cellar, "foo", "1.0.0", "bin", "foo")); err != nil || string(b) != "old\n" {
+		t.Fatalf("old keg disturbed: b=%q err=%v", b, err)
+	}
+	// No staging litter left behind.
+	ents, _ := os.ReadDir(filepath.Join(cellar, "foo"))
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".bodega-stage-") {
+			t.Fatalf("staging dir leaked: %s", e.Name())
+		}
+	}
+}
+
+// TestExtractRejectsIdentityMismatch: a bottle whose top-level dir doesn't match
+// the resolved formula name is rejected (defends against payload swap).
+func TestExtractRejectsIdentityMismatch(t *testing.T) {
+	cellar := t.TempDir()
+	tarBytes := makeBottleTarGz(t, "evil", "1.0.0", map[string]string{"bin/evil": "x\n"})
+	archive := filepath.Join(t.TempDir(), "b.tar.gz")
+	if err := os.WriteFile(archive, tarBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Extract(context.Background(), archive, cellar, "foo"); err == nil {
+		t.Fatal("expected identity-mismatch error (top-level evil != resolved foo)")
+	}
+	// Nothing should have landed in the cellar.
+	if _, err := os.Stat(filepath.Join(cellar, "evil")); !os.IsNotExist(err) {
+		t.Fatalf("evil keg leaked into cellar: %v", err)
+	}
+}
+
+func TestExtractRejectsUnsafeName(t *testing.T) {
+	cellar := t.TempDir()
+	for _, bad := range []string{"", "..", ".", "a/b", "../x", "-rf"} {
+		if _, err := Extract(context.Background(), "/x.tar.gz", cellar, bad); err == nil {
+			t.Fatalf("expected rejection of unsafe name %q", bad)
+		}
+	}
+}
+
+func TestIsSafeKegName(t *testing.T) {
+	ok := []string{"ripgrep", "python@3.12", "openssl@3", "gcc", "lib_foo", "a+b", "node.js"}
+	bad := []string{"", ".", "..", "a/b", "../etc", "-rf", "a;b", "a b", "a\\b", "foo$"}
+	for _, n := range ok {
+		if !isSafeKegName(n) {
+			t.Errorf("isSafeKegName(%q) = false, want true", n)
+		}
+	}
+	for _, n := range bad {
+		if isSafeKegName(n) {
+			t.Errorf("isSafeKegName(%q) = true, want false", n)
+		}
 	}
 }
 
@@ -223,8 +311,10 @@ func TestIsMachOMagic(t *testing.T) {
 		{"macho64_le", leU32(0xfeedfacf), true},
 		{"macho64_be", beU32(0xfeedfacf), true},
 		{"macho32_le", leU32(0xfeedface), true},
-		{"fat_be", beU32(0xcafebabe), true},
-		{"fat64_be", beU32(0xcafebabf), true},
+		{"fat_be", append(beU32(0xcafebabe), beU32(2)...), true},
+		{"fat64_be", append(beU32(0xcafebabf), beU32(2)...), true},
+		{"java_class", append(beU32(0xcafebabe), beU32(52)...), false}, // Java 8 major=52, not nfat_arch
+		{"fat_be_truncated", beU32(0xcafebabe), false},                 // no nfat_arch → can't confirm
 		{"elf", []byte{0x7f, 'E', 'L', 'F'}, false},
 		{"plain_text", []byte("Hello"), false},
 		{"short", []byte{0xfe}, false},
@@ -427,7 +517,7 @@ func TestRelocateEndToEnd(t *testing.T) {
 	if err := os.MkdirAll(cellarRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pkgRoot, err := Extract(context.Background(), archive, cellarRoot)
+	pkgRoot, err := Extract(context.Background(), archive, cellarRoot, "foo")
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}

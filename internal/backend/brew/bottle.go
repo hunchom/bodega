@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -71,13 +72,19 @@ func MachOFixupsAvailable() bool {
 	return machOFixupsOK
 }
 
-// Extract unpacks a bottle tar.gz at tarGzPath into destDir and returns
-// the absolute path to the inner <pkg>/<version> directory that brew
-// bottles canonically wrap their payload in. destDir must already exist.
-// We shell out to system tar because gnutar's handling of hardlinks,
-// sparse files, xattrs, and resource forks has had three decades to
-// settle and a Go reimplementation would be all downside.
-func Extract(ctx context.Context, tarGzPath, destDir string) (string, error) {
+// Extract unpacks a bottle tar.gz at tarGzPath into destDir and returns the
+// absolute path to the inner <wantName>/<version> keg. destDir must exist.
+// Extraction is staged in a fresh temp dir under destDir, then the keg is
+// renamed into place — so a pre-existing <wantName> keg (upgrade, reinstall,
+// installing a newer version over an old one) can't confuse detection. The
+// tarball's top-level dir is asserted == wantName, rejecting a bottle whose
+// payload doesn't match the resolved formula.
+//
+// We shell out to system tar (libarchive bsdtar on macOS) because its handling
+// of hardlinks, sparse files, xattrs, resource forks — and its default refusal
+// of `..`/absolute paths and symlink-following on extract — has had three
+// decades to settle; a Go reimplementation would be all downside.
+func Extract(ctx context.Context, tarGzPath, destDir, wantName string) (string, error) {
 	info, err := os.Stat(destDir)
 	if err != nil {
 		return "", fmt.Errorf("extract: stat dest: %w", err)
@@ -85,72 +92,99 @@ func Extract(ctx context.Context, tarGzPath, destDir string) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("extract: dest %q is not a directory", destDir)
 	}
-
-	// Snapshot the top-level entries so we can diff after extraction and
-	// identify the <pkg> directory the tarball introduced. Bottles are
-	// structured as <pkg>/<version>/..., so we want to return the
-	// <pkg>/<version> path on success.
-	before, err := topLevelNames(destDir)
-	if err != nil {
-		return "", fmt.Errorf("extract: snapshot dest: %w", err)
+	if !isSafeKegName(wantName) {
+		return "", fmt.Errorf("extract: unsafe package name %q", wantName)
 	}
 
-	cmd := exec.CommandContext(ctx, "tar", "-xzf", tarGzPath, "-C", destDir)
+	// Stage on the same filesystem so the move into the cellar is atomic and a
+	// pre-existing keg never collides with the extracted tree.
+	stage, err := os.MkdirTemp(destDir, ".bodega-stage-")
+	if err != nil {
+		return "", fmt.Errorf("extract: stage dir: %w", err)
+	}
+	defer os.RemoveAll(stage)
+
+	cmd := exec.CommandContext(ctx, "tar", "-xzf", tarGzPath, "-C", stage)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("extract: tar -xzf %s: %w: %s", tarGzPath, err, trimOutput(out))
 	}
 
-	after, err := topLevelNames(destDir)
+	// Exactly one top-level dir, and it must be the formula we resolved.
+	top, err := os.ReadDir(stage)
 	if err != nil {
-		return "", fmt.Errorf("extract: rescan dest: %w", err)
+		return "", fmt.Errorf("extract: read stage: %w", err)
 	}
-	var pkgName string
-	for name := range after {
-		if _, existed := before[name]; existed {
+	pkgName := ""
+	for _, e := range top {
+		if !e.IsDir() {
 			continue
 		}
-		// Prefer the first newly-introduced directory. Bottles always
-		// produce a single top-level dir; if tar added a stray regular
-		// file we'd rather error below than silently pick it.
-		if after[name] {
-			pkgName = name
-			break
+		if pkgName != "" {
+			return "", fmt.Errorf("extract: tarball %s has multiple top-level dirs", tarGzPath)
 		}
+		pkgName = e.Name()
 	}
 	if pkgName == "" {
-		return "", fmt.Errorf("extract: tarball %s did not produce a new top-level directory in %s", tarGzPath, destDir)
+		return "", fmt.Errorf("extract: tarball %s produced no package dir", tarGzPath)
+	}
+	if pkgName != wantName {
+		return "", fmt.Errorf("extract: tarball top-level %q != resolved %q", pkgName, wantName)
 	}
 
-	pkgDir := filepath.Join(destDir, pkgName)
-	entries, err := os.ReadDir(pkgDir)
+	// Inner <version> dir — the on-disk keg version (may carry a _<revision>
+	// suffix the resolver's bare stable_version doesn't).
+	inner, err := os.ReadDir(filepath.Join(stage, pkgName))
 	if err != nil {
 		return "", fmt.Errorf("extract: read pkg dir: %w", err)
 	}
-	// The <pkg> dir should contain exactly one <version> sub-dir. If
-	// for whatever reason it doesn't we return the pkg dir itself so
-	// the caller at least has a handle on the extracted payload.
-	for _, e := range entries {
+	ver := ""
+	for _, e := range inner {
 		if e.IsDir() {
-			return filepath.Join(pkgDir, e.Name()), nil
+			ver = e.Name()
+			break
 		}
 	}
-	return pkgDir, nil
+	if ver == "" {
+		return "", fmt.Errorf("extract: %s has no version dir", pkgName)
+	}
+
+	// Move keg to destDir/<pkg>/<ver>. Clear a same-version keg first
+	// (reinstall) so the rename doesn't fail on a non-empty target.
+	pkgDest := filepath.Join(destDir, pkgName)
+	if err := os.MkdirAll(pkgDest, 0o755); err != nil {
+		return "", fmt.Errorf("extract: mkdir %s: %w", pkgDest, err)
+	}
+	final := filepath.Join(pkgDest, ver)
+	if _, err := os.Lstat(final); err == nil {
+		if err := os.RemoveAll(final); err != nil {
+			return "", fmt.Errorf("extract: clear existing keg %s: %w", final, err)
+		}
+	}
+	if err := os.Rename(filepath.Join(stage, pkgName, ver), final); err != nil {
+		return "", fmt.Errorf("extract: move keg into place: %w", err)
+	}
+	return final, nil
 }
 
-// topLevelNames returns a map of entries directly under dir, with the
-// value indicating whether each entry is a directory. Used by Extract
-// to diff "before" and "after" so we can identify the package the
-// tarball dropped in without relying on conventions that might drift.
-func topLevelNames(dir string) (map[string]bool, error) {
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
+// isSafeKegName reports whether name is a single safe Cellar component — no path
+// separator, no `..` traversal, no leading dash (arg injection). Homebrew leaf
+// names are [a-z0-9@._+-]; tap-qualified names (with "/") are NOT native kegs.
+func isSafeKegName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
 	}
-	out := make(map[string]bool, len(ents))
-	for _, e := range ents {
-		out[e.Name()] = e.IsDir()
+	if name != filepath.Base(name) || strings.HasPrefix(name, "-") {
+		return false
 	}
-	return out, nil
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '@' || r == '.' || r == '_' || r == '+' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Relocate walks packageRoot, rewrites placeholder strings in every
@@ -205,7 +239,16 @@ func Relocate(ctx context.Context, packageRoot string, opts RelocateOptions) err
 		return walkErr
 	}
 
-	if !MachOFixupsAvailable() || len(machOFiles) == 0 {
+	if len(machOFiles) == 0 {
+		return nil
+	}
+	if !MachOFixupsAvailable() {
+		// On macOS the install names MUST be rewritten or the binaries won't
+		// load — refuse rather than report a green install that segfaults. On
+		// non-darwin (Linux CI) these binaries never run, so text-only is fine.
+		if runtime.GOOS == "darwin" {
+			return fmt.Errorf("relocate: %d Mach-O file(s) need install_name_tool + codesign; install Xcode Command Line Tools (xcode-select --install)", len(machOFiles))
+		}
 		return nil
 	}
 	for _, f := range machOFiles {
@@ -356,19 +399,33 @@ func applyReplacements(data []byte, repls []replacement) ([]byte, bool) {
 	return current, true
 }
 
-// isMachOMagic returns true when the first four bytes of b match one of
-// the Mach-O magic numbers. Covers thin 32/64-bit in both endiannesses
-// plus fat (universal) binaries, which are always stored big-endian on
-// disk but also exist in a 64-bit variant (0xcafebabf) that debug/macho
-// doesn't expose as a named constant.
+// maxFatArch caps the architecture count accepted in a fat Mach-O header.
+// Universal binaries ship a handful of slices; the cap disambiguates fat
+// Mach-O (0xCAFEBABE) from Java .class files, which share that magic but encode
+// a major_version (>=45) where the arch count would sit.
+const maxFatArch = 0x20
+
+// isMachOMagic returns true when b begins with a Mach-O magic number. Covers
+// thin 32/64-bit in both endiannesses plus fat (universal) binaries — always
+// big-endian on disk, including the 64-bit variant 0xcafebabf that debug/macho
+// doesn't name. The fat magic 0xCAFEBABE collides with Java .class; we require a
+// sane nfat_arch to tell them apart.
 func isMachOMagic(b []byte) bool {
 	if len(b) < 4 {
 		return false
 	}
 	be := binary.BigEndian.Uint32(b[:4])
 	switch be {
-	case macho.Magic32, macho.Magic64, macho.MagicFat, 0xcafebabf:
+	case macho.Magic32, macho.Magic64:
 		return true
+	case macho.MagicFat, 0xcafebabf:
+		// Real fat header's next u32 is nfat_arch (small); a Java .class
+		// file's is its version (>=45). Need the count to disambiguate.
+		if len(b) < 8 {
+			return false
+		}
+		n := binary.BigEndian.Uint32(b[4:8])
+		return n >= 1 && n <= maxFatArch
 	}
 	le := binary.LittleEndian.Uint32(b[:4])
 	switch le {
@@ -414,10 +471,9 @@ func fixMachO(ctx context.Context, path string, opts RelocateOptions) error {
 	// binaries whose signature no longer matches their bytes, so this
 	// step is not optional on Apple Silicon.
 	if out, err := runTool(ctx, "codesign", "--force", "--sign", "-", "--preserve-metadata=entitlements,requirements,flags", path); err != nil {
-		// A corrupt / detached signature is not fatal for the overall
-		// install — the user can re-sign later — but we still want to
-		// surface it. The higher-level installer can decide whether
-		// to degrade to a warning based on context.
+		// Fatal: macOS 11+ refuses to load a binary whose signature no longer
+		// matches its bytes, so a binary we rewrote but couldn't re-sign is
+		// unusable. Fail the package rather than ship an unloadable keg.
 		return fmt.Errorf("codesign: %w: %s", err, trimOutput(out))
 	}
 	return nil

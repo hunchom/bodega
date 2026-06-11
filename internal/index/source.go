@@ -34,6 +34,11 @@ const (
 	DefaultCaskURL    = "https://formulae.brew.sh/api/cask.jws.json"
 )
 
+// maxIndexBytes caps a single index payload read. Real formula/cask JWS files
+// are tens of MB; the ceiling stops a hostile/compromised origin from
+// exhausting memory before the signature is even checked.
+const maxIndexBytes = 256 << 20
+
 // NetworkSource fetches + verifies the index straight from formulae.brew.sh.
 // This is what makes bodega independent of a local brew install.
 type NetworkSource struct {
@@ -110,9 +115,12 @@ func (n *NetworkSource) get(ctx context.Context, url, prevETag string) ([]byte, 
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", false, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxIndexBytes+1))
 	if err != nil {
 		return nil, "", false, err
+	}
+	if int64(len(body)) > maxIndexBytes {
+		return nil, "", false, fmt.Errorf("index body exceeds %d bytes", maxIndexBytes)
 	}
 	return body, resp.Header.Get("ETag"), true, nil
 }

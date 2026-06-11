@@ -44,6 +44,11 @@ const overallDownloadTimeout = 10 * time.Minute
 // honor Retry-After when the server provides one.
 const maxRetries = 3
 
+// maxBottleBytes caps a single bottle stream. The largest Homebrew bottles run
+// ~300MB; 2GiB leaves generous headroom while stopping a hostile/compromised
+// CDN from filling the disk before the sha256 gate rejects the bytes.
+const maxBottleBytes = 2 << 30
+
 // Package-level sentinel errors. Callers use errors.Is to branch on them
 // and fall back to `brew install` when we can't resolve a bottle ourselves.
 var (
@@ -386,7 +391,9 @@ func streamToFile(ctx context.Context, resp *http.Response, wantDigest, destPath
 	// in progressWriter.Write.
 	writer.ctx = ctx
 
-	if _, err := io.Copy(writer, resp.Body); err != nil {
+	// Cap the stream — an oversize body is truncated, so the sha256 below
+	// won't match and the file is discarded.
+	if _, err := io.Copy(writer, io.LimitReader(resp.Body, maxBottleBytes)); err != nil {
 		return fmt.Errorf("ghcr: copy body: %w", err)
 	}
 	// Final progress tick so callers see a 100% event even if the
