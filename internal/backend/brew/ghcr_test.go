@@ -391,3 +391,39 @@ func TestDownloadBlobArgValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestFetchTokenRepoNameMapping: GHCR repo names forbid "@" and "+"; brew maps
+// formula names with tr("@","/") + tr("+","x") (GitHubPackages.image_formula_name).
+// openssl@4 must request scope homebrew/core/openssl/4, not .../openssl@4 (400).
+func TestFetchTokenRepoNameMapping(t *testing.T) {
+	defer resetGHCRState(t)
+
+	var gotScope string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotScope = r.URL.Query().Get("scope")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"tok"}`))
+	}))
+	defer srv.Close()
+	httpClient = srv.Client()
+	tokenEndpoint = srv.URL
+
+	cases := []struct{ formula, wantScope string }{
+		{"openssl@4", "repository:homebrew/core/openssl/4:pull"},
+		{"python@3.12", "repository:homebrew/core/python/3.12:pull"},
+		{"libsigc++", "repository:homebrew/core/libsigcxx:pull"},
+		{"zstd", "repository:homebrew/core/zstd:pull"},
+	}
+	for _, c := range cases {
+		tok, err := fetchToken(context.Background(), c.formula)
+		if err != nil {
+			t.Fatalf("%s: fetchToken: %v", c.formula, err)
+		}
+		if tok != "tok" {
+			t.Fatalf("%s: token=%q", c.formula, tok)
+		}
+		if gotScope != c.wantScope {
+			t.Errorf("%s: scope=%q want %q", c.formula, gotScope, c.wantScope)
+		}
+	}
+}

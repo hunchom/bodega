@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -170,11 +171,20 @@ func getToken(ctx context.Context, formula string) (string, error) {
 	return tok, nil
 }
 
+// ghcrRepoName maps a formula name to its GHCR repository path segment.
+// Docker repo names forbid "@" and "+", so brew substitutes "@" → "/" and
+// "+" → "x" (GitHubPackages.image_formula_name): openssl@4 →
+// homebrew/core/openssl/4, libsigc++ → homebrew/core/libsigcxx. Passing the
+// raw name makes the token endpoint 400.
+func ghcrRepoName(formula string) string {
+	return strings.NewReplacer("@", "/", "+", "x").Replace(formula)
+}
+
 // fetchToken performs the unauthenticated GET against ghcr.io/token with the
 // scope query set to the formula's repository. GHCR returns a JSON envelope
 // with a "token" field that's a short-lived JWT.
 func fetchToken(ctx context.Context, formula string) (string, error) {
-	q := fmt.Sprintf("?service=ghcr.io&scope=repository:homebrew/core/%s:pull", formula)
+	q := fmt.Sprintf("?service=ghcr.io&scope=repository:homebrew/core/%s:pull", ghcrRepoName(formula))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenEndpoint+q, nil)
 	if err != nil {
 		return "", fmt.Errorf("ghcr: build token request: %w", err)

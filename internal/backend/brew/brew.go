@@ -985,12 +985,20 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	}
 
 	if len(native) > 0 {
-		_, err := b.InstallNative(ctx, native, InstallOpts{
+		res, err := b.InstallNative(ctx, native, InstallOpts{
 			Overwrite: true,
 			Progress:  func(ev InstallEvent) { fwd(w, ev.Message) },
 		})
 		if err != nil {
 			if !errors.Is(err, ErrNativeUnsupported) {
+				// Partial failure: name the kegs that did land so runMutate
+				// journals them and `yum history undo` stays accurate.
+				done := installedRoots(res)
+				if len(done) > 0 {
+					invalidateCache(done)
+					sort.Strings(done)
+					return nil, &PartialError{Succeeded: done, Err: err}
+				}
 				return nil, err
 			}
 			viaBrew = append(viaBrew, native...) // native unsupported → brew
@@ -1001,6 +1009,12 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	}
 	if len(viaBrew) > 0 {
 		if err := b.upgradeBrew(ctx, w, viaBrew); err != nil {
+			// The native half already landed — keep it journaled.
+			if len(native) > 0 {
+				done := append([]string{}, native...)
+				sort.Strings(done)
+				return nil, &PartialError{Succeeded: done, Err: err}
+			}
 			return nil, err
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -567,5 +568,151 @@ func TestMachOFixupsAvailableIsCached(t *testing.T) {
 	b := MachOFixupsAvailable()
 	if a != b {
 		t.Fatalf("MachOFixupsAvailable inconsistent: %v vs %v", a, b)
+	}
+}
+
+// shimMachOTools puts fake otool/install_name_tool/codesign scripts on PATH
+// and returns log paths recording each tool's invocations. otoolID is what
+// `otool -D` reports as the current LC_ID_DYLIB ("" = none); otoolDeps is
+// the dep list `otool -L` prints under the file-header line.
+func shimMachOTools(t *testing.T, otoolID string, otoolDeps []string) (intoolLog, codesignLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	intoolLog = filepath.Join(dir, "intool.log")
+	codesignLog = filepath.Join(dir, "codesign.log")
+
+	var otool strings.Builder
+	otool.WriteString("#!/bin/sh\necho \"$2:\"\n")
+	otool.WriteString("if [ \"$1\" = \"-D\" ]; then\n")
+	if otoolID != "" {
+		otool.WriteString("echo '" + otoolID + "'\n")
+	}
+	otool.WriteString("exit 0\nfi\n")
+	for _, d := range otoolDeps {
+		otool.WriteString("echo '\t" + d + " (compatibility version 1.0.0, current version 1.0.0)'\n")
+	}
+	// The mutating tools mimic the real ones' EACCES on read-only targets
+	// (the file is always the last argument) so the u+w dance is load-bearing.
+	needWritable := "for f in \"$@\"; do :; done\n" +
+		"[ -w \"$f\" ] || { echo \"$f: Permission denied\" >&2; exit 1; }\n"
+	scripts := map[string]string{
+		"otool":             otool.String(),
+		"install_name_tool": "#!/bin/sh\n" + needWritable + "echo \"$@\" >> " + intoolLog + "\nexit 0\n",
+		"codesign":          "#!/bin/sh\n" + needWritable + "echo \"$@\" >> " + codesignLog + "\nexit 0\n",
+	}
+	for name, body := range scripts {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	return intoolLog, codesignLog
+}
+
+// TestFixMachOSkipsUnmodifiedFile: a Mach-O with no placeholder deps and no
+// dylib id rewrite is left byte-identical, so its original bottle signature
+// is still valid — codesign must NOT run. Read-only is the real-world trigger:
+// llvm ships r--r--r-- static archives; an unnecessary codesign EACCESed and
+// failed the whole package.
+func TestFixMachOSkipsUnmodifiedFile(t *testing.T) {
+	_, codesignLog := shimMachOTools(t, "", []string{"/usr/lib/libSystem.B.dylib"})
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "libclang_rt.asan_abi_osx.a")
+	if err := os.WriteFile(path, []byte("not really mach-o"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	err := fixMachO(context.Background(), path, RelocateOptions{
+		Prefix: "/opt/homebrew", Cellar: "/opt/homebrew/Cellar",
+		Opt: "/opt/homebrew/opt", Library: "/opt/homebrew/Library", Perl: "/usr/bin/perl",
+	})
+	if err != nil {
+		t.Fatalf("fixMachO on untouched read-only file: %v", err)
+	}
+	if _, err := os.Stat(codesignLog); !errors.Is(err, os.ErrNotExist) {
+		t.Error("codesign ran on an unmodified file")
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o444 {
+		t.Errorf("mode changed: %v", st.Mode().Perm())
+	}
+}
+
+// TestFixMachOReadOnlyModified: a read-only dylib that DOES need an
+// install-name rewrite gets a transient u+w (brew's ensure_writable dance),
+// is re-signed, and ends with its original mode restored.
+func TestFixMachOReadOnlyModified(t *testing.T) {
+	intoolLog, codesignLog := shimMachOTools(t, "@@HOMEBREW_CELLAR@@/foo/1.0/lib/libfoo.dylib",
+		[]string{"@@HOMEBREW_CELLAR@@/zlib/1.3/lib/libz.dylib"})
+
+	dir := filepath.Join(t.TempDir(), "Cellar", "foo", "1.0", "lib")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "libfoo.dylib")
+	if err := os.WriteFile(path, []byte("fake dylib"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	err := fixMachO(context.Background(), path, RelocateOptions{
+		Prefix: "/opt/homebrew", Cellar: "/opt/homebrew/Cellar",
+		Opt: "/opt/homebrew/opt", Library: "/opt/homebrew/Library", Perl: "/usr/bin/perl",
+	})
+	if err != nil {
+		t.Fatalf("fixMachO: %v", err)
+	}
+
+	in, err := os.ReadFile(intoolLog)
+	if err != nil {
+		t.Fatalf("install_name_tool never ran: %v", err)
+	}
+	if !strings.Contains(string(in), "-change @@HOMEBREW_CELLAR@@/zlib/1.3/lib/libz.dylib /opt/homebrew/Cellar/zlib/1.3/lib/libz.dylib") {
+		t.Errorf("missing -change invocation, log:\n%s", in)
+	}
+	if _, err := os.Stat(codesignLog); err != nil {
+		t.Error("codesign must run after a rewrite")
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o444 {
+		t.Errorf("original mode not restored: %v", st.Mode().Perm())
+	}
+}
+
+// TestFixMachOSkipsDylibWithRealID: a dylib whose LC_ID_DYLIB already carries
+// a real path (arm64 bottles ship these) and has no placeholder deps must be
+// fully skipped — no install_name_tool, no codesign. Brew only rewrites IDs
+// still holding a placeholder.
+func TestFixMachOSkipsDylibWithRealID(t *testing.T) {
+	intoolLog, codesignLog := shimMachOTools(t, "/opt/homebrew/Cellar/foo/1.0/lib/libfoo.dylib",
+		[]string{"/usr/lib/libSystem.B.dylib"})
+
+	dir := filepath.Join(t.TempDir(), "Cellar", "foo", "1.0", "lib")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "libfoo.dylib")
+	if err := os.WriteFile(path, []byte("fake dylib"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	err := fixMachO(context.Background(), path, RelocateOptions{
+		Prefix: "/opt/homebrew", Cellar: "/opt/homebrew/Cellar",
+		Opt: "/opt/homebrew/opt", Library: "/opt/homebrew/Library", Perl: "/usr/bin/perl",
+	})
+	if err != nil {
+		t.Fatalf("fixMachO: %v", err)
+	}
+	if _, err := os.Stat(intoolLog); !errors.Is(err, os.ErrNotExist) {
+		t.Error("install_name_tool ran on a dylib with a real ID and no placeholder deps")
+	}
+	if _, err := os.Stat(codesignLog); !errors.Is(err, os.ErrNotExist) {
+		t.Error("codesign ran on an unmodified dylib")
 	}
 }

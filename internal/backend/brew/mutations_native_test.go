@@ -170,3 +170,84 @@ func TestCleanupNativePrunesOldVersions(t *testing.T) {
 		t.Fatal("linked version 2.0 should have been kept")
 	}
 }
+
+// TestUpgradePartialNativeFailure: when some packages land and others fail,
+// Upgrade must surface a *PartialError naming the successes so runMutate
+// journals them and `yum history undo` stays accurate (run 37: 6 installs,
+// zero journal events).
+func TestUpgradePartialNativeFailure(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	prefix := t.TempDir()
+	installWithStubbedPrefix(t, prefix)
+	if err := os.MkdirAll(filepath.Join(prefix, "Cellar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := makeBottleTarGz(t, "ok", "2.0", map[string]string{"bin/ok": "#!/bin/sh\n"})
+	sha := sha256Hex(payload)
+	m := newGHCRMock(t, payload)
+	httpClient = m.server.Client()
+	tokenEndpoint = m.server.URL + "/token"
+	t.Cleanup(func() { resetGHCRState(t) })
+
+	okURL := m.server.URL + "/v2/homebrew/core/ok/blobs/sha256:" + sha
+	badURL := m.server.URL + "/v2/homebrew/core/bad/blobs/sha256:deadbeef"
+	fixtureIndex(t, `[
+	  {"name":"ok","versions":{"stable":"2.0"},"bottle":{"stable":{"files":{"all":{"url":"`+okURL+`","sha256":"`+sha+`"}}}}},
+	  {"name":"bad","versions":{"stable":"2.0"},"bottle":{"stable":{"files":{"all":{"url":"`+badURL+`","sha256":"deadbeef"}}}}}
+	]`)
+
+	b := &Brew{}
+	_, err := b.Upgrade(context.Background(), []string{"ok", "bad"}, nil)
+	if err == nil {
+		t.Fatal("want partial failure error, got nil")
+	}
+	var pe *PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *PartialError, got %T: %v", err, err)
+	}
+	if len(pe.Succeeded) != 1 || pe.Succeeded[0] != "ok" {
+		t.Fatalf("Succeeded=%v want [ok]", pe.Succeeded)
+	}
+	if _, err := os.Stat(filepath.Join(prefix, "Cellar", "ok", "2.0", "bin", "ok")); err != nil {
+		t.Errorf("ok 2.0 should be installed: %v", err)
+	}
+}
+
+// TestUpgradeBrewFailureAfterNativeSuccess: the second PartialError producer —
+// the native half lands, then the brew half (cask/source formula) fails. The
+// successes must still be journaled.
+func TestUpgradeBrewFailureAfterNativeSuccess(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	prefix := t.TempDir()
+	installWithStubbedPrefix(t, prefix)
+	if err := os.MkdirAll(filepath.Join(prefix, "Cellar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := makeBottleTarGz(t, "ok", "2.0", map[string]string{"bin/ok": "#!/bin/sh\n"})
+	sha := sha256Hex(payload)
+	m := newGHCRMock(t, payload)
+	httpClient = m.server.Client()
+	tokenEndpoint = m.server.URL + "/token"
+	t.Cleanup(func() { resetGHCRState(t) })
+
+	okURL := m.server.URL + "/v2/homebrew/core/ok/blobs/sha256:" + sha
+	fixtureIndex(t, `[
+	  {"name":"ok","versions":{"stable":"2.0"},"bottle":{"stable":{"files":{"all":{"url":"`+okURL+`","sha256":"`+sha+`"}}}}},
+	  {"name":"srconly","versions":{"stable":"2.0"}}
+	]`)
+
+	b := &Brew{R: &runner.Fake{ExitCode: map[string]int{"brew upgrade -- srconly": 1}}}
+	_, err := b.Upgrade(context.Background(), []string{"ok", "srconly"}, nil)
+	if err == nil {
+		t.Fatal("want error from failing brew half, got nil")
+	}
+	var pe *PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *PartialError, got %T: %v", err, err)
+	}
+	if len(pe.Succeeded) != 1 || pe.Succeeded[0] != "ok" {
+		t.Fatalf("Succeeded=%v want [ok]", pe.Succeeded)
+	}
+}

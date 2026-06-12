@@ -439,44 +439,87 @@ func isMachOMagic(b []byte) bool {
 // post-relocation prefix. Two passes: first rewrite the dylib's own
 // install name (LC_ID_DYLIB) so downstream binaries link against the
 // right absolute path, then rewrite every LC_LOAD_DYLIB whose target
-// still references a brew placeholder. install_name_tool refuses to
-// touch files whose code signature it hasn't invalidated, so we
-// unconditionally re-sign at the end.
+// still references a brew placeholder. install_name_tool invalidates the
+// code signature, so any rewritten file is ad-hoc re-signed.
+//
+// Untouched files keep their original (valid) bottle signature and are NOT
+// re-signed — brew behaves the same, and the needless codesign used to
+// EACCES on read-only members like llvm's libclang_rt.*.a, failing the
+// whole package. Files we do rewrite get a transient u+w when their mode
+// lacks it (brew's ensure_writable), restored afterwards.
 func fixMachO(ctx context.Context, path string, opts RelocateOptions) error {
-	if strings.HasSuffix(path, ".dylib") {
-		id := dylibIDFor(path, opts)
-		if id != "" {
-			if out, err := runTool(ctx, "install_name_tool", "-id", id, path); err != nil {
-				return fmt.Errorf("install_name_tool -id: %w: %s", err, trimOutput(out))
-			}
-		}
-	}
-
 	deps, err := listMachODeps(ctx, path)
 	if err != nil {
 		return err
 	}
+	type depChange struct{ from, to string }
+	var changes []depChange
 	for _, dep := range deps {
-		rewritten := rewriteMachOPath(dep, opts)
-		if rewritten == "" || rewritten == dep {
-			continue
+		if rewritten := rewriteMachOPath(dep, opts); rewritten != "" && rewritten != dep {
+			changes = append(changes, depChange{from: dep, to: rewritten})
 		}
-		if out, err := runTool(ctx, "install_name_tool", "-change", dep, rewritten, path); err != nil {
-			return fmt.Errorf("install_name_tool -change %s %s: %w: %s", dep, rewritten, err, trimOutput(out))
+	}
+	// Brew only rewrites LC_ID_DYLIB when the current ID still carries a
+	// placeholder; dylibs already shipping real or @rpath IDs are left
+	// alone. Forcing -id unconditionally would dirty (and re-sign) every
+	// dylib in every bottle.
+	wantID := ""
+	if strings.HasSuffix(path, ".dylib") {
+		curID, err := machOCurrentID(ctx, path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(curID, "@@HOMEBREW_") {
+			wantID = dylibIDFor(path, opts)
+		}
+	}
+	if wantID == "" && len(changes) == 0 {
+		return nil
+	}
+
+	restore, err := ensureWritable(path)
+	if err != nil {
+		return err
+	}
+	defer restore()
+
+	if wantID != "" {
+		if out, err := runTool(ctx, "install_name_tool", "-id", wantID, path); err != nil {
+			return fmt.Errorf("install_name_tool -id: %w: %s", err, trimOutput(out))
+		}
+	}
+	for _, c := range changes {
+		if out, err := runTool(ctx, "install_name_tool", "-change", c.from, c.to, path); err != nil {
+			return fmt.Errorf("install_name_tool -change %s %s: %w: %s", c.from, c.to, err, trimOutput(out))
 		}
 	}
 
 	// Ad-hoc re-sign. --preserve-metadata keeps any entitlements /
 	// flags the original bottle baked in; macOS 11+ refuses to load
 	// binaries whose signature no longer matches their bytes, so this
-	// step is not optional on Apple Silicon.
+	// step is not optional on Apple Silicon. Fatal on failure: a binary
+	// we rewrote but couldn't re-sign is unloadable.
 	if out, err := runTool(ctx, "codesign", "--force", "--sign", "-", "--preserve-metadata=entitlements,requirements,flags", path); err != nil {
-		// Fatal: macOS 11+ refuses to load a binary whose signature no longer
-		// matches its bytes, so a binary we rewrote but couldn't re-sign is
-		// unusable. Fail the package rather than ship an unloadable keg.
 		return fmt.Errorf("codesign: %w: %s", err, trimOutput(out))
 	}
 	return nil
+}
+
+// ensureWritable adds the owner-write bit when missing and returns a restore
+// func that puts the original mode back. No-op for already-writable files.
+func ensureWritable(path string) (func(), error) {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("relocate: stat %s: %w", path, err)
+	}
+	mode := st.Mode().Perm()
+	if mode&0o200 != 0 {
+		return func() {}, nil
+	}
+	if err := os.Chmod(path, mode|0o200); err != nil {
+		return nil, fmt.Errorf("relocate: chmod u+w %s: %w", path, err)
+	}
+	return func() { _ = os.Chmod(path, mode) }, nil
 }
 
 // dylibIDFor computes the absolute install-name this dylib should
@@ -491,6 +534,26 @@ func dylibIDFor(path string, opts RelocateOptions) string {
 		return ""
 	}
 	return opts.Cellar + path[idx+len("/Cellar"):]
+}
+
+// machOCurrentID returns the dylib's current LC_ID_DYLIB install name via
+// `otool -D`. Output is the file path echo line followed by the ID; a dylib
+// without an ID command yields "".
+func machOCurrentID(ctx context.Context, path string) (string, error) {
+	out, err := runTool(ctx, "otool", "-D", path)
+	if err != nil {
+		return "", fmt.Errorf("otool -D: %w: %s", err, trimOutput(out))
+	}
+	lines := strings.Split(string(out), "\n")
+	for i, line := range lines {
+		if i == 0 {
+			continue // filename echo
+		}
+		if line = strings.TrimSpace(line); line != "" {
+			return line, nil
+		}
+	}
+	return "", nil
 }
 
 // listMachODeps runs `otool -L` and returns the list of dependent

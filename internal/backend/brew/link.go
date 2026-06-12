@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // linkSubdirs is the set of cellar subdirectories brew stitches into the
@@ -65,11 +66,14 @@ func (e *LinkCollisionError) Error() string {
 //
 // Also creates the $PREFIX/opt/<pkg> symlink pointing at cellarPkgDir.
 //
-// TODO(perf): brew uses a "shallow then deep" strategy — if a directory
-// subtree is entirely new it creates a single directory symlink instead of
-// recursing. We always deep-link leaves, which is correct but produces more
-// inodes than brew's native linker. Revisit once the rest of the native
-// install path is proven.
+// Brew itself shallow-links wholly-new subtrees (one directory symlink into
+// the keg, e.g. lib/cmake/zstd -> ../../Cellar/zstd/1.5.7/lib/cmake/zstd).
+// We always deep-link leaves, so a prefix previously linked by brew has
+// directory symlinks sitting where we need real directories; linkWalk
+// unwinds those brew-style (see ensureRealDir) instead of colliding.
+//
+// TODO(perf): consider adopting brew's "shallow then deep" strategy — it
+// produces fewer inodes. Deep-linking is correct either way.
 func Link(prefix, cellarPkgDir string, opts LinkOptions) ([]string, error) {
 	if prefix == "" {
 		return nil, fmt.Errorf("link: empty prefix")
@@ -77,6 +81,10 @@ func Link(prefix, cellarPkgDir string, opts LinkOptions) ([]string, error) {
 	if cellarPkgDir == "" {
 		return nil, fmt.Errorf("link: empty cellar dir")
 	}
+
+	// Cellar root for ensureRealDir's containment check: Cellar/<pkg>/<ver>.
+	cellarRoot := filepath.Dir(filepath.Dir(cellarPkgDir))
+	dirs := &dirState{ready: map[string]bool{}, dryUnwound: map[string]string{}}
 
 	var created []string
 	for _, sub := range linkSubdirs {
@@ -95,7 +103,7 @@ func Link(prefix, cellarPkgDir string, opts LinkOptions) ([]string, error) {
 		}
 
 		dstRoot := filepath.Join(prefix, sub)
-		made, err := linkWalk(srcRoot, dstRoot, opts)
+		made, err := linkWalk(srcRoot, dstRoot, cellarRoot, opts, dirs)
 		created = append(created, made...)
 		if err != nil {
 			return created, err
@@ -124,11 +132,22 @@ func Link(prefix, cellarPkgDir string, opts LinkOptions) ([]string, error) {
 	return created, nil
 }
 
+// dirState caches per-Link directory work: ready marks prefix dirs verified
+// (or created) as real directories; dryUnwound maps dirs a DryRun would
+// have unwound to the old symlink's resolved target ("" when nothing would
+// be preserved), so the preview can model the preserved children instead of
+// Lstat-ing through the still-present symlink into an old keg.
+type dirState struct {
+	ready      map[string]bool
+	dryUnwound map[string]string
+}
+
 // linkWalk recursively mirrors srcRoot's directory tree under dstRoot,
 // creating a symlink at every leaf (regular file or symlink inside the
-// cellar). Parent directories in the prefix are created with MkdirAll as
-// needed. Returns the paths created, in creation order.
-func linkWalk(srcRoot, dstRoot string, opts LinkOptions) ([]string, error) {
+// cellar). Parent directories in the prefix are created — and brew-style
+// directory symlinks unwound — by ensureRealDir. Returns the paths created,
+// in creation order.
+func linkWalk(srcRoot, dstRoot, cellarRoot string, opts LinkOptions, dirs *dirState) ([]string, error) {
 	var created []string
 	err := filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
@@ -142,10 +161,19 @@ func linkWalk(srcRoot, dstRoot string, opts LinkOptions) ([]string, error) {
 			return err
 		}
 		dst := filepath.Join(dstRoot, rel)
-		if !opts.DryRun {
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return fmt.Errorf("link: mkdir %s: %w", filepath.Dir(dst), err)
+		if err := ensureRealDir(filepath.Dir(dst), dstRoot, cellarRoot, opts, dirs); err != nil {
+			return err
+		}
+		if oldDir, unwound := dirs.dryUnwound[filepath.Dir(dst)]; opts.DryRun && unwound {
+			// Parent would have been unwound; Lstat would otherwise follow
+			// the still-present symlink into the old keg and misreport a
+			// collision. Model linkOne against the children the real unwind
+			// would preserve so preview and real run agree.
+			made, err := previewLeafUnderUnwound(dst, path, oldDir, opts)
+			if made {
+				created = append(created, dst)
 			}
+			return err
 		}
 		made, err := linkOne(dst, path, opts)
 		if made {
@@ -154,6 +182,206 @@ func linkWalk(srcRoot, dstRoot string, opts LinkOptions) ([]string, error) {
 		return err
 	})
 	return created, err
+}
+
+// ensureRealDir makes dir a real directory the deep-link walk can descend
+// into, ensuring its parents first. Brew shallow-links whole subtrees as
+// directory symlinks; when one sits where we need a real dir it's unwound
+// (see unwindDirSymlink). Paths at or above dstRoot keep plain MkdirAll
+// semantics — brew never symlinks prefix top-level dirs. Results are cached
+// in dirs.ready so each dir is checked once per Link call.
+func ensureRealDir(dir, dstRoot, cellarRoot string, opts LinkOptions, dirs *dirState) error {
+	if dirs.ready[dir] {
+		return nil
+	}
+	rel, err := filepath.Rel(dstRoot, dir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if !opts.DryRun {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("link: mkdir %s: %w", dir, err)
+			}
+		}
+		dirs.ready[dir] = true
+		return nil
+	}
+
+	parent := filepath.Dir(dir)
+	if err := ensureRealDir(parent, dstRoot, cellarRoot, opts, dirs); err != nil {
+		return err
+	}
+	if oldParent, unwound := dirs.dryUnwound[parent]; opts.DryRun && unwound {
+		// Everything under a would-be-unwound dir is virtual; checking the
+		// real FS would look through the old symlink. The real run preserves
+		// the old target's children and then re-unwinds any that are dirs —
+		// mirror that cascade so deeper previews stay accurate.
+		oldTarget := ""
+		if oldParent != "" {
+			cand := filepath.Join(oldParent, filepath.Base(dir))
+			if st, err := os.Stat(cand); err == nil {
+				if st.IsDir() {
+					oldTarget = cand
+				} else if !opts.Overwrite {
+					return &LinkCollisionError{Target: dir, WantLink: "(directory)"}
+				}
+			}
+		}
+		dirs.dryUnwound[dir] = oldTarget
+		dirs.ready[dir] = true
+		return nil
+	}
+
+	st, statErr := os.Lstat(dir)
+	switch {
+	case errors.Is(statErr, fs.ErrNotExist):
+		if !opts.DryRun {
+			err := os.Mkdir(dir, 0o755)
+			if err != nil && !errors.Is(err, fs.ErrExist) {
+				return fmt.Errorf("link: mkdir %s: %w", dir, err)
+			}
+			if errors.Is(err, fs.ErrExist) {
+				// Raced-in entry between Lstat and Mkdir. Trusting it blind
+				// would let a raced-in symlink route every leaf write through
+				// an unvetted target — re-check and only accept a real dir.
+				st2, err2 := os.Lstat(dir)
+				if err2 != nil {
+					return fmt.Errorf("link: stat %s: %w", dir, err2)
+				}
+				if st2.Mode()&os.ModeSymlink != 0 || !st2.IsDir() {
+					return &LinkCollisionError{Target: dir, WantLink: "(directory)"}
+				}
+			}
+		}
+	case statErr != nil:
+		return fmt.Errorf("link: stat %s: %w", dir, statErr)
+	case st.Mode()&os.ModeSymlink != 0:
+		oldTarget, err := unwindDirSymlink(dir, cellarRoot, opts)
+		if err != nil {
+			return err
+		}
+		if opts.DryRun {
+			dirs.dryUnwound[dir] = oldTarget
+		}
+	case st.IsDir():
+		// Already a real directory.
+	default:
+		// Regular file where a directory must go — user data, never clobber.
+		return &LinkCollisionError{Target: dir, WantLink: "(directory)"}
+	}
+	dirs.ready[dir] = true
+	return nil
+}
+
+// previewLeafUnderUnwound is linkOne's DryRun stand-in for leaves whose
+// parent dir would be unwound: the preserved child with the same name (if
+// any) is what the real run's linkOne would find. Keeps preview verdicts —
+// no-op, create, collide — identical to the real run.
+func previewLeafUnderUnwound(dst, cellarFile, oldDir string, opts LinkOptions) (bool, error) {
+	if oldDir == "" {
+		return true, nil // dangling/non-dir old target → nothing preserved
+	}
+	oldChild := filepath.Join(oldDir, filepath.Base(dst))
+	if _, err := os.Lstat(oldChild); err != nil {
+		return true, nil // no preserved sibling with this name
+	}
+	if oldChild == cellarFile {
+		return false, nil // preserved link already points at us → no-op
+	}
+	if !opts.Overwrite {
+		relDest, err := filepath.Rel(filepath.Dir(dst), cellarFile)
+		if err != nil {
+			relDest = cellarFile
+		}
+		exist, err := filepath.Rel(filepath.Dir(dst), oldChild)
+		if err != nil {
+			exist = oldChild
+		}
+		return false, &LinkCollisionError{Target: dst, ExistingLink: exist, WantLink: relDest}
+	}
+	return true, nil
+}
+
+// unwindDirSymlink replaces a directory symlink pointing into the Cellar
+// with a real directory, re-linking the old target's children individually —
+// brew's own conflict resolution when a shallow-linked subtree gains a second
+// owner or gets upgraded. Preserved child links replicate state that existed
+// before this Link call, so they are deliberately NOT journaled: rollback
+// must not remove another keg's links.
+//
+// Only directory targets (unwind-preserve) and dangling targets (stale,
+// replace) are unwind candidates. A LIVE non-directory target is another
+// keg's leaf link sitting where we need a directory — a genuine conflict
+// that collides unless Overwrite. Symlinks resolving outside the Cellar are
+// user data and always collide. DryRun classifies but doesn't touch the
+// filesystem; the returned string is the old target dir ("" when nothing
+// would be preserved) for preview bookkeeping.
+func unwindDirSymlink(dir, cellarRoot string, opts LinkOptions) (string, error) {
+	raw, err := os.Readlink(dir)
+	if err != nil {
+		return "", fmt.Errorf("link: readlink %s: %w", dir, err)
+	}
+	resolved := raw
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(filepath.Dir(dir), raw)
+	}
+	resolved = filepath.Clean(resolved)
+	if rel, err := filepath.Rel(cellarRoot, resolved); err != nil ||
+		rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", &LinkCollisionError{Target: dir, ExistingLink: raw, WantLink: "(directory)"}
+	}
+
+	st, statErr := os.Stat(dir) // follows the link
+	isDir := statErr == nil && st.IsDir()
+	switch {
+	case statErr == nil && !isDir && !opts.Overwrite:
+		return "", &LinkCollisionError{Target: dir, ExistingLink: raw, WantLink: "(directory)"}
+	case statErr != nil && !errors.Is(statErr, fs.ErrNotExist):
+		return "", fmt.Errorf("link: stat %s: %w", dir, statErr)
+	}
+
+	if opts.DryRun {
+		if isDir {
+			return resolved, nil
+		}
+		return "", nil
+	}
+
+	// Children of the old target get individual links so a still-installed
+	// keg's shallow-linked files survive the unwind. Preserving them is the
+	// whole point — a ReadDir failure aborts rather than silently orphaning
+	// another keg's links.
+	var children []os.DirEntry
+	if isDir {
+		children, err = os.ReadDir(resolved)
+		if err != nil {
+			return "", fmt.Errorf("link: read unwind target %s: %w", resolved, err)
+		}
+	}
+	// Re-check immediately before the swap: a raced-in regular file must
+	// not be deleted (never-clobber invariant).
+	if st, err := os.Lstat(dir); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		return "", &LinkCollisionError{Target: dir, WantLink: "(directory)"}
+	}
+	if err := os.Remove(dir); err != nil {
+		return "", fmt.Errorf("link: remove %s: %w", dir, err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		return "", fmt.Errorf("link: mkdir %s: %w", dir, err)
+	}
+	for _, c := range children {
+		childDst := filepath.Join(dir, c.Name())
+		childSrc := filepath.Join(resolved, c.Name())
+		relDest, err := filepath.Rel(dir, childSrc)
+		if err != nil {
+			relDest = childSrc
+		}
+		if err := os.Symlink(relDest, childDst); err != nil {
+			return "", fmt.Errorf("link: preserve %s: %w", childDst, err)
+		}
+	}
+	if isDir {
+		return resolved, nil
+	}
+	return "", nil
 }
 
 // linkOne creates a symlink at target pointing at cellarFile. Returns
