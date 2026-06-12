@@ -405,3 +405,44 @@ func TestPruneStaleVersionLinks(t *testing.T) {
 		t.Fatalf("shared link wrongly removed: %v", err)
 	}
 }
+
+// TestInstallNativeWritesLinkedRecord: brew's var/homebrew/linked/<name>
+// bookkeeping must be written on install and removed on uninstall, or
+// `brew doctor` flags every native keg as unlinked.
+func TestInstallNativeWritesLinkedRecord(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	prefix := t.TempDir()
+	installWithStubbedPrefix(t, prefix)
+	if err := os.MkdirAll(filepath.Join(prefix, "Cellar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := makeBottleTarGz(t, "ok", "2.0", map[string]string{"bin/ok": "#!/bin/sh\n"})
+	sha := sha256Hex(payload)
+	m := newGHCRMock(t, payload)
+	httpClient = m.server.Client()
+	tokenEndpoint = m.server.URL + "/token"
+	t.Cleanup(func() { resetGHCRState(t) })
+	fixtureIndex(t, `[{"name":"ok","versions":{"stable":"2.0"},"bottle":{"stable":{"files":{"all":{"url":"`+
+		m.server.URL+"/v2/homebrew/core/ok/blobs/sha256:"+sha+`","sha256":"`+sha+`"}}}}}]`)
+
+	b := &Brew{}
+	if _, err := b.InstallNative(context.Background(), []string{"ok"}, InstallOpts{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	rec := filepath.Join(prefix, "var", "homebrew", "linked", "ok")
+	tgt, err := os.Readlink(rec)
+	if err != nil {
+		t.Fatalf("linked record missing: %v", err)
+	}
+	if filepath.Base(tgt) != "2.0" {
+		t.Fatalf("record -> %s, want version 2.0", tgt)
+	}
+
+	if _, err := b.UninstallNative(context.Background(), []string{"ok"}, UninstallOpts{Force: true}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if _, err := os.Lstat(rec); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("linked record not removed on uninstall: %v", err)
+	}
+}

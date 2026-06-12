@@ -178,12 +178,16 @@ func (b *Brew) UninstallNative(ctx context.Context, names []string, opts Uninsta
 			result.Failed[p.name] = fmt.Errorf("scan symlinks: %w", err)
 			continue
 		}
-		// Also tear down $PREFIX/opt/<name> when it points into the
-		// cellar dir we're removing. Include it in syms so the unlink
-		// loop handles it uniformly.
+		// Also tear down $PREFIX/opt/<name> and brew's linked-keg record
+		// when they point into the cellar dir we're removing. Include them
+		// in syms so the unlink loop handles them uniformly.
 		optLink := filepath.Join(prefix, "opt", p.name)
 		if optPointsInto(optLink, p.pkgDir) {
 			syms = append(syms, optLink)
+		}
+		linkedRec := filepath.Join(prefix, "var", "homebrew", "linked", p.name)
+		if optPointsInto(linkedRec, p.pkgDir) {
+			syms = append(syms, linkedRec)
 		}
 
 		emit(UninstallEvent{

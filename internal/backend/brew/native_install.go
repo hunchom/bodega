@@ -312,6 +312,11 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 			continue
 		}
 
+		// Brew-compatible bookkeeping: without var/homebrew/linked/<name>,
+		// `brew doctor` flags every native install as an unlinked keg and
+		// `brew link` fights our symlinks.
+		writeLinkedRecord(prefix, p.Name, filepath.Base(root))
+
 		// Upgrade (Overwrite): drop prefix symlinks left by older versions of
 		// this keg — files renamed/removed in the new version would otherwise
 		// dangle once Cleanup prunes the old keg.
@@ -346,6 +351,19 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 		return result, errors.Join(failErrs...)
 	}
 	return result, nil
+}
+
+// writeLinkedRecord mirrors brew's var/homebrew/linked/<name> symlink so brew
+// tooling (doctor, link, uses --installed) agrees the keg is linked. Best
+// effort — the install already succeeded; a failed record never fails it.
+func writeLinkedRecord(prefix, name, version string) {
+	dir := filepath.Join(prefix, "var", "homebrew", "linked")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	link := filepath.Join(dir, name)
+	_ = os.Remove(link)
+	_ = os.Symlink(filepath.Join("..", "..", "..", "Cellar", name, version), link)
 }
 
 // pruneStaleVersionLinks removes prefix symlinks still pointing into versions of
