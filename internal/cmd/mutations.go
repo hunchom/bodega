@@ -284,6 +284,10 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 				app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
 			}
 		}
+		if len(affected) == 0 && !app.W.JSON {
+			// Total silence reads as a hang/failure ("yum update no output").
+			app.W.Printf("%s %s\n", theme.OK.Render("✓"), theme.Muted.Render("nothing to do — everything up to date"))
+		}
 	}
 	if err := app.Journal.End(app.Ctx, txID, exit, txPkgs); err != nil {
 		return err

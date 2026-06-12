@@ -253,6 +253,13 @@ func StyleBrewLine(l string) string {
 		return theme.Muted.Render("· " + strings.TrimPrefix(l, "==> "))
 	case strings.HasPrefix(l, "Error: "):
 		return theme.Err.Render("✗") + " " + strings.TrimPrefix(l, "Error: ")
+	case strings.HasPrefix(l, "Warning: Not upgrading "):
+		// Common after an auto-fix verify re-run — it means success.
+		name := strings.TrimPrefix(l, "Warning: Not upgrading ")
+		if i := strings.IndexByte(name, ','); i > 0 {
+			name = name[:i]
+		}
+		return theme.Muted.Render("· " + name + " already up to date")
 	case strings.HasPrefix(l, "Warning: "):
 		return theme.Warn.Render("⚠") + " " + strings.TrimPrefix(l, "Warning: ")
 	case strings.HasSuffix(l, "was successfully upgraded!"), strings.HasSuffix(l, "was successfully installed!"):

@@ -16,6 +16,7 @@ func TestStyleBrewLine(t *testing.T) {
 		{"Purging files for version 1.1.3 of Cask ghostty", "Purging"},
 		{"auto-fix docker-desktop: app bundle missing — reinstalling cask", "⟳"},
 		{"plain passthrough line", "plain passthrough line"},
+		{"Warning: Not upgrading docker-desktop, the latest version is already installed", "docker-desktop already up to date"},
 	}
 	for _, c := range cases {
 		got := StyleBrewLine(c.in)

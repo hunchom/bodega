@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -142,13 +143,35 @@ func versionStr() string { return version.Version }
 
 // brewVersion returns the first line of `brew --version` output, or "" if brew
 // isn't on PATH or the probe fails. Stored in the journal so audits can tell
-// which brew produced a given transaction.
+// which brew produced a given transaction. The subprocess costs ~100ms on
+// every mutation, so the answer is cached on disk keyed by the brew binary's
+// path+mtime.
 func brewVersion() string {
-	out, err := exec.Command("brew", "--version").Output()
+	bin, err := exec.LookPath("brew")
+	if err != nil {
+		return ""
+	}
+	var key, cachePath string
+	if st, err := os.Stat(bin); err == nil {
+		key = fmt.Sprintf("%s|%d", bin, st.ModTime().UnixNano())
+		if dir, err := os.UserCacheDir(); err == nil {
+			cachePath = filepath.Join(dir, "bodega", "brew-version")
+			if b, err := os.ReadFile(cachePath); err == nil {
+				if k, v, ok := strings.Cut(strings.TrimSpace(string(b)), "\n"); ok && k == key {
+					return v
+				}
+			}
+		}
+	}
+	out, err := exec.Command(bin, "--version").Output()
 	if err != nil {
 		return ""
 	}
 	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	if cachePath != "" && line != "" {
+		_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
+		_ = os.WriteFile(cachePath, []byte(key+"\n"+line+"\n"), 0o644)
+	}
 	return line
 }
 

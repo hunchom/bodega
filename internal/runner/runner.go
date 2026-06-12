@@ -31,6 +31,13 @@ var brewEnv = []string{
 	"HOMEBREW_NO_ANALYTICS=1",
 	"HOMEBREW_NO_ENV_HINTS=1",
 	"HOMEBREW_NO_EMOJI=1",
+	// Removals are yum's call, not a brew side effect: an implicit
+	// autoremove during an uninstall (observed: a cask auto-fix reinstall
+	// silently removed 5 formulae) bypasses the journal, so `yum history
+	// undo` can't restore what brew took. Same for install-time cleanup of
+	// old kegs — yum's Cleanup owns that.
+	"HOMEBREW_NO_AUTOREMOVE=1",
+	"HOMEBREW_NO_INSTALL_CLEANUP=1",
 }
 
 // envForBrew returns the caller's environment with our brew knobs appended

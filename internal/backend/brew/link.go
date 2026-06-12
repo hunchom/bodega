@@ -428,7 +428,15 @@ func linkOne(target, cellarFile string, opts LinkOptions) (bool, error) {
 		if filepath.IsAbs(cur) && cur == cellarFile {
 			return false, nil
 		}
-		if !opts.Overwrite {
+		// A dangling link points at nothing — replacing it loses nothing.
+		// Brew replaces broken symlinks unconditionally; without this, a
+		// fresh install over stale leftovers (e.g. an autoremoved keg's
+		// orphaned bin links) collides and fails.
+		dangling := false
+		if _, err := os.Stat(target); errors.Is(err, fs.ErrNotExist) {
+			dangling = true
+		}
+		if !opts.Overwrite && !dangling {
 			return false, &LinkCollisionError{
 				Target:       target,
 				ExistingLink: cur,

@@ -618,3 +618,34 @@ func TestLink_DryRunMatchesRealOnMergeCollision(t *testing.T) {
 		t.Fatalf("real run: want LinkCollisionError, got %v", realErr)
 	}
 }
+
+func TestLink_DanglingLeafSymlinkReplacedWithoutOverwrite(t *testing.T) {
+	// Leftover bin links from a removed keg dangle; a fresh install must
+	// replace them (brew does), not collide.
+	tmp := t.TempDir()
+	prefix := filepath.Join(tmp, "prefix")
+	keg := mkCellar(t, tmp, "pnpm", "11.6.0", []string{"bin/pnpm"})
+
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(prefix, "bin", "pnpm")
+	if err := os.Symlink(filepath.Join(tmp, "Cellar", "pnpm", "11.5.3", "bin", "pnpm"), stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(prefix, keg, LinkOptions{}); err != nil {
+		t.Fatalf("Link over dangling leaf: %v", err)
+	}
+	if got := readlinkAbs(t, stale); got != filepath.Join(keg, "bin", "pnpm") {
+		t.Errorf("bin/pnpm -> %s, want new keg", got)
+	}
+
+	// A LIVE mismatched leaf still collides without Overwrite.
+	other := mkCellar(t, tmp, "other", "1.0", []string{"bin/pnpm"})
+	_, err := Link(prefix, other, LinkOptions{})
+	var lce *LinkCollisionError
+	if !errors.As(err, &lce) {
+		t.Fatalf("live mismatched leaf must collide, got %v", err)
+	}
+}

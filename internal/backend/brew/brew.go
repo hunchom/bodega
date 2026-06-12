@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hunchom/bodega/internal/backend"
+	"github.com/hunchom/bodega/internal/index"
 	"github.com/hunchom/bodega/internal/runner"
 )
 
@@ -1018,6 +1019,10 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 		}
 	}
 	if len(viaBrew) > 0 {
+		// brew fetches serially during upgrade; warming its download cache
+		// in parallel first collapses the long download phase. Failures are
+		// ignored — the upgrade itself surfaces real problems.
+		b.prefetchBrew(ctx, w, st, viaBrew)
 		acted, err := b.upgradeBrew(ctx, w, viaBrew)
 		if err != nil {
 			// The native half already landed — keep it journaled.
@@ -1035,6 +1040,34 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	upgraded := append(append([]string{}, native...), viaBrew...)
 	sort.Strings(upgraded)
 	return upgraded, nil
+}
+
+// prefetchBrew warms brew's download cache for names concurrently (3 workers)
+// so the subsequent serial `brew upgrade` skips straight to installing.
+// Output is discarded and errors ignored.
+func (b *Brew) prefetchBrew(ctx context.Context, w backend.ProgressWriter, st *index.Store, names []string) {
+	if len(names) < 2 {
+		return // a single download gains nothing from parallelism
+	}
+	fwd(w, fmt.Sprintf("pre-fetching %d downloads in parallel", len(names)))
+	sem := make(chan struct{}, 3)
+	var wg sync.WaitGroup
+	for _, n := range names {
+		wg.Add(1)
+		go func(n string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			args := []string{"fetch", "--", n}
+			if st != nil {
+				if ck, err := st.LookupCask(n); err == nil && ck != nil {
+					args = []string{"fetch", "--cask", "--", n}
+				}
+			}
+			_, _ = b.R.Run(ctx, "brew", args...)
+		}(n)
+	}
+	wg.Wait()
 }
 
 // upgradeBrew runs the brew-half upgrade. Returns the subset of names
