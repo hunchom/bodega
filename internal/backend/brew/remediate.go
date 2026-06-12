@@ -147,6 +147,11 @@ var brewHints = []brewHint{
 		re:   regexp.MustCompile(`Your Xcode \(.*\) is (too outdated|outdated)`),
 		hint: "update Xcode from the App Store, then re-run",
 	},
+	{
+		// Trusting a third-party tap is a security decision — hint, never auto.
+		re:   regexp.MustCompile(`taps are not trusted`),
+		hint: "trust the tap if you rely on it: brew trust <user>/<tap> — or remove it: brew untap <user>/<tap>",
+	},
 }
 
 // brewHintFor returns the first matching hint for a failed run's output, or "".

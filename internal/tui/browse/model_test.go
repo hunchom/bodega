@@ -1,10 +1,13 @@
 package browse
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/hunchom/bodega/internal/backend"
 )
@@ -222,5 +225,37 @@ func TestRenderRowFitsWidth(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestScrollIndicatorPreservesEscapes: the ↓/↑ indicators replace the first
+// cells of the first/last visible rows. Rune-slicing there beheaded the
+// selected row's first SGR sequence, printing "8;2;215;166;99m" as literal
+// text (user-visible corruption). Strip must be ANSI-aware.
+func TestScrollIndicatorPreservesEscapes(t *testing.T) {
+	s := newStyles()
+	styled := s.cursorMark.Render("▎") + s.cursorRow.Render(" libmagic   5.48 ")
+
+	got := stripLeading(styled, 3)
+	if strings.Contains(ansi.Strip(got), ";2;") {
+		t.Fatalf("escape beheaded — SGR params visible as text: %q", ansi.Strip(got))
+	}
+	if w := lipgloss.Width(got); w != lipgloss.Width(styled)-3 {
+		t.Errorf("visible width: got %d want %d", w, lipgloss.Width(styled)-3)
+	}
+
+	// Full-list integration: selected row last visible with more below —
+	// the exact screenshot layout.
+	m := newModel(nil, nil, nil)
+	for i := 0; i < 30; i++ {
+		m.pkgs = append(m.pkgs, backend.Package{Name: fmt.Sprintf("pkg-%02d", i), Version: "5.48", Source: backend.SrcFormula})
+		m.filtered = append(m.filtered, i)
+	}
+	m.ready = true
+	m.width, m.height = 64, 14
+	m.cursor = 9 // bottom of the visible window, more entries below
+	out := m.renderList(s, 64, 12)
+	if vis := ansi.Strip(out); strings.Contains(vis, ";2;") || strings.Contains(vis, "[3") {
+		t.Fatalf("visible escape fragments in list render:\n%s", vis)
 	}
 }

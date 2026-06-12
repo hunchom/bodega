@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/hunchom/bodega/internal/backend"
 )
@@ -403,13 +404,12 @@ func spinnerChar(step int) string {
 	return frames[step%len(frames)]
 }
 
-// stripLeading removes up to n leading characters (runes) from s.
+// stripLeading removes n leading visible CELLS from s, preserving ANSI
+// sequences. Rune-slicing a styled row beheads its first escape — the
+// remainder ("8;2;215;166;99m…") then prints as literal text whenever the
+// scroll indicator overwrites a styled (e.g. selected) row's left edge.
 func stripLeading(s string, n int) string {
-	r := []rune(s)
-	if n >= len(r) {
-		return ""
-	}
-	return string(r[n:])
+	return ansi.TruncateLeft(s, n, "")
 }
 
 // wrapText does a naive word wrap at column w.
