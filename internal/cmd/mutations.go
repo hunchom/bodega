@@ -12,6 +12,7 @@ import (
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/backend/brew"
 	"github.com/hunchom/bodega/internal/journal"
+	"github.com/hunchom/bodega/internal/ui"
 	"github.com/hunchom/bodega/internal/ui/theme"
 )
 
@@ -217,16 +218,26 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 	var txPkgs []journal.TxPackage
 	exit := 0
 	var buf bytes.Buffer
-	var pw *backend.StreamPW
-	if live && !app.W.JSON {
-		pw = &backend.StreamPW{W: app.W.Out} // stream live; nothing to re-dump on failure
-	} else {
+	var pw backend.ProgressWriter
+	var lv *ui.Live
+	switch {
+	case live && !app.W.JSON && app.W.IsTTY():
+		// Live TUI block: per-package spinners/bars for native installs,
+		// restyled passthrough for brew subprocess output.
+		lv = ui.NewLive(app.W.Out)
+		pw = &livePW{L: lv}
+	case live && !app.W.JSON:
+		pw = &backend.StreamPW{W: app.W.Out} // stream plain; nothing to re-dump on failure
+	default:
 		pw = &backend.StreamPW{W: &buf} // buffer for on-failure dump / quiet under --json
 	}
 	var failed []map[string]string
 	var runErr error
 
 	affected, err := doer(names, pw)
+	if lv != nil {
+		lv.Close()
+	}
 	if err != nil {
 		exit = 1
 		runErr = err
@@ -259,7 +270,7 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 				}
 			}
 			for _, n := range names {
-				if succeeded[n] {
+				if succeeded[n] && lv == nil { // Live already showed per-pkg ✓
 					app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
 				}
 			}
@@ -269,7 +280,7 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 		// backend resolves its own set, so `names` is empty but `affected` isn't.
 		for _, n := range affected {
 			txPkgs = append(txPkgs, journal.TxPackage{Name: n, Source: "formula", Action: action})
-			if !app.W.JSON {
+			if !app.W.JSON && lv == nil { // Live already showed per-pkg ✓
 				app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
 			}
 		}
@@ -303,7 +314,10 @@ func runMutate(app *AppCtx, verb string, names []string, doer func([]string, bac
 		}
 	}
 	if exit != 0 {
-		return fmt.Errorf("%s: %v", verb, runErr)
+		// Human mode printed the ✗ line; JSON mode carried the error in
+		// the payload. Either way don't double-print via main's "yum:"
+		// handler — exit nonzero quietly.
+		return &ExitErr{Code: 1}
 	}
 	return nil
 }

@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/hunchom/bodega/internal/backend"
 )
 
 // ErrNativeUnsupported is returned by InstallNative when the host can't run a
@@ -54,11 +56,28 @@ type InstallOpts struct {
 	Progress func(event InstallEvent)
 }
 
+// EventSink is optionally implemented by progress writers that want
+// structured install events instead of flat text lines (live TUI rendering).
+type EventSink interface {
+	InstallEvent(phase, pkg, version string, current, total int64, message string)
+}
+
+// emitTo adapts a ProgressWriter into an InstallEvent consumer: structured
+// when the writer implements EventSink, flat message lines otherwise.
+func emitTo(w backend.ProgressWriter) func(InstallEvent) {
+	if es, ok := w.(EventSink); ok {
+		return func(ev InstallEvent) {
+			es.InstallEvent(ev.Phase, ev.Package, ev.Version, ev.Current, ev.Total, ev.Message)
+		}
+	}
+	return func(ev InstallEvent) { fwd(w, ev.Message) }
+}
+
 // InstallEvent is a UX-facing update. Callers format it for stdout / TUI.
 type InstallEvent struct {
 	// Phase is one of: "resolve", "download", "extract", "relocate",
-	// "link", "done". New phases may be added over time; unknown values
-	// should be rendered as a generic progress line.
+	// "link", "installed", "failed", "done". New phases may be added over
+	// time; unknown values should be rendered as a generic progress line.
 	Phase string
 
 	// Package is the formula name this event pertains to. Empty for
@@ -209,6 +228,14 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 	// Phase 3: parallel downloads.
 	downloads := runDownloads(ctx, pending, cacheDir, conc, emit)
 
+	// Per-package terminal events so live renderers can settle each line.
+	emitFail := func(p Plan, phase string, err error) {
+		emit(InstallEvent{
+			Phase: "failed", Package: p.Name, Version: p.Version, Total: -1,
+			Message: fmt.Sprintf("%s: %s: %v", p.Name, phase, err),
+		})
+	}
+
 	// Phase 4: per-plan extract + relocate + link, sequential in topo order.
 	var failErrs []error
 	for _, p := range pending {
@@ -218,6 +245,7 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 				Name: p.Name, Phase: "download", Err: d.err,
 			})
 			failErrs = append(failErrs, fmt.Errorf("%s: download: %w", p.Name, d.err))
+			emitFail(p, "download", d.err)
 			continue
 		}
 
@@ -234,6 +262,7 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 				Name: p.Name, Phase: "extract", Err: err,
 			})
 			failErrs = append(failErrs, fmt.Errorf("%s: extract: %w", p.Name, err))
+			emitFail(p, "extract", err)
 			continue
 		}
 
@@ -257,6 +286,7 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 				Name: p.Name, Phase: "relocate", Err: relocErr,
 			})
 			failErrs = append(failErrs, fmt.Errorf("%s: relocate: %w", p.Name, relocErr))
+			emitFail(p, "relocate", relocErr)
 			continue
 		}
 
@@ -278,6 +308,7 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 				Name: p.Name, Phase: "link", Err: linkErr,
 			})
 			failErrs = append(failErrs, fmt.Errorf("%s: link: %w", p.Name, linkErr))
+			emitFail(p, "link", linkErr)
 			continue
 		}
 
@@ -295,6 +326,10 @@ func (b *Brew) InstallNative(ctx context.Context, names []string, opts InstallOp
 			Symlinks:    syms,
 			InstalledAt: time.Now(),
 			IsRoot:      p.IsRoot,
+		})
+		emit(InstallEvent{
+			Phase: "installed", Package: p.Name, Version: p.Version, Total: -1,
+			Message: fmt.Sprintf("installed %s %s", p.Name, p.Version),
 		})
 		// Drop any stale `brew info` cache entry so the next yum info
 		// call re-reads the newly-installed version metadata.

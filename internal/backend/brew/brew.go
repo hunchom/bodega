@@ -799,6 +799,13 @@ func brewArgs(sub string, names []string) []string {
 }
 
 func (b *Brew) stream(ctx context.Context, w backend.ProgressWriter, args ...string) error {
+	_, err := b.streamTail(ctx, w, args...)
+	return err
+}
+
+// streamTail is stream plus the captured stdout+stderr tail, so callers can
+// pattern-match brew's failure output (see remediate.go).
+func (b *Brew) streamTail(ctx context.Context, w backend.ProgressWriter, args ...string) (string, error) {
 	var sink io.Writer = io.Discard
 	if w != nil {
 		sink = w
@@ -810,16 +817,17 @@ func (b *Brew) stream(ctx context.Context, w backend.ProgressWriter, args ...str
 		io.MultiWriter(sink, &outTail),
 		io.MultiWriter(sink, &errTail),
 		"brew", args...)
+	tail := string(errTail.Bytes()) + "\n" + string(outTail.Bytes())
 	if err != nil {
-		return err
+		return tail, err
 	}
 	if r.ExitCode != 0 {
 		if msg := lastBrewMessage(errTail.Bytes(), outTail.Bytes()); msg != "" {
-			return fmt.Errorf("brew %s: %s", args[0], msg)
+			return tail, fmt.Errorf("brew %s: %s", args[0], msg)
 		}
-		return fmt.Errorf("brew %s: exit %d", args[0], r.ExitCode)
+		return tail, fmt.Errorf("brew %s: exit %d", args[0], r.ExitCode)
 	}
-	return nil
+	return tail, nil
 }
 
 func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWriter) error {
@@ -829,12 +837,7 @@ func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWr
 	// run the native path (no Homebrew prefix, cold API cache) — fall back
 	// to the subprocess silently. Any other error is a real failure.
 	res, err := b.InstallNative(ctx, names, InstallOpts{
-		Progress: func(ev InstallEvent) {
-			if w == nil || ev.Message == "" {
-				return
-			}
-			fmt.Fprintln(w, ev.Message)
-		},
+		Progress: emitTo(w),
 	})
 	if err == nil {
 		invalidateCache(names)
@@ -849,8 +852,10 @@ func (b *Brew) Install(ctx context.Context, names []string, w backend.ProgressWr
 		}
 		return err
 	}
-	if err := b.stream(ctx, w, brewArgs("install", names)...); err != nil {
-		return err
+	if tail, err := b.streamTail(ctx, w, brewArgs("install", names)...); err != nil {
+		if _, err = b.remediateBrewFailure(ctx, w, "install", names, tail, err); err != nil {
+			return err
+		}
 	}
 	invalidateCache(names)
 	return nil
@@ -898,8 +903,8 @@ func (b *Brew) Remove(ctx context.Context, names []string, w backend.ProgressWri
 		}
 		return err
 	}
-	if err := b.stream(ctx, w, brewArgs("uninstall", names)...); err != nil {
-		return err
+	if tail, err := b.streamTail(ctx, w, brewArgs("uninstall", names)...); err != nil {
+		return withBrewHint(err, tail) // hints only; auto-removing more is not our call
 	}
 	invalidateCache(names)
 	return nil
@@ -913,7 +918,11 @@ func (b *Brew) Reinstall(ctx context.Context, names []string, w backend.Progress
 		Progress: func(ev UninstallEvent) { fwd(w, ev.Message) },
 	})
 	if errors.Is(uerr, ErrNativeUnsupported) {
-		if err := b.stream(ctx, w, brewArgs("reinstall", names)...); err != nil {
+		if tail, err := b.streamTail(ctx, w, brewArgs("reinstall", names)...); err != nil {
+			if _, err = b.remediateBrewFailure(ctx, w, "reinstall", names, tail, err); err == nil {
+				invalidateCache(names)
+				return nil
+			}
 			return err
 		}
 		invalidateCache(names)
@@ -943,10 +952,11 @@ func fwd(w backend.ProgressWriter, msg string) {
 func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWriter) ([]string, error) {
 	st := readyIndex(ctx)
 	if st == nil {
-		if err := b.upgradeBrew(ctx, w, names); err != nil {
+		acted, err := b.upgradeBrew(ctx, w, names)
+		if err != nil {
 			return nil, err
 		}
-		return names, nil
+		return acted, nil
 	}
 
 	var native, viaBrew []string
@@ -987,7 +997,7 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	if len(native) > 0 {
 		res, err := b.InstallNative(ctx, native, InstallOpts{
 			Overwrite: true,
-			Progress:  func(ev InstallEvent) { fwd(w, ev.Message) },
+			Progress:  emitTo(w),
 		})
 		if err != nil {
 			if !errors.Is(err, ErrNativeUnsupported) {
@@ -1008,7 +1018,8 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 		}
 	}
 	if len(viaBrew) > 0 {
-		if err := b.upgradeBrew(ctx, w, viaBrew); err != nil {
+		acted, err := b.upgradeBrew(ctx, w, viaBrew)
+		if err != nil {
 			// The native half already landed — keep it journaled.
 			if len(native) > 0 {
 				done := append([]string{}, native...)
@@ -1017,6 +1028,7 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 			}
 			return nil, err
 		}
+		viaBrew = acted // consumed packages were never touched
 	}
 
 	// The set actually acted on (pinned/skipped excluded), for the journal.
@@ -1025,12 +1037,35 @@ func (b *Brew) Upgrade(ctx context.Context, names []string, w backend.ProgressWr
 	return upgraded, nil
 }
 
-func (b *Brew) upgradeBrew(ctx context.Context, w backend.ProgressWriter, names []string) error {
-	if err := b.stream(ctx, w, brewArgs("upgrade", names)...); err != nil {
-		return err
+// upgradeBrew runs the brew-half upgrade. Returns the subset of names
+// actually acted on: consumed packages (e.g. "not installed", "already up
+// to date") were never touched and must not be reported or journaled as
+// upgraded.
+func (b *Brew) upgradeBrew(ctx context.Context, w backend.ProgressWriter, names []string) ([]string, error) {
+	tail, err := b.streamTail(ctx, w, brewArgs("upgrade", names)...)
+	acted := names
+	if err != nil {
+		// Known failure shapes (manually deleted .app, corrupt cache, …)
+		// get one auto-fix pass + a clean verify before we give up.
+		consumed, rerr := b.remediateBrewFailure(ctx, w, "upgrade", names, tail, err)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if len(consumed) > 0 {
+			skip := map[string]bool{}
+			for _, n := range consumed {
+				skip[n] = true
+			}
+			acted = make([]string, 0, len(names))
+			for _, n := range names {
+				if !skip[n] {
+					acted = append(acted, n)
+				}
+			}
+		}
 	}
-	invalidateCache(names)
-	return nil
+	invalidateCache(acted)
+	return acted, nil
 }
 
 // pinnedSet returns the set of pinned formula names.
@@ -1177,7 +1212,9 @@ type tailWriter struct {
 	buf []byte
 }
 
-const tailWriterCap = 8 << 10
+// 32KB: enough to retain mid-run errors from chatty cask installers (conda
+// et al print tens of KB after a failure) for the remediation matcher.
+const tailWriterCap = 32 << 10
 
 func (t *tailWriter) Write(p []byte) (int, error) {
 	t.buf = append(t.buf, p...)

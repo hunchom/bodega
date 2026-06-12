@@ -17,7 +17,11 @@ func main() {
 		if errors.As(err, &ec) {
 			msg = ec.Short
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", theme.Err.Render("yum:"), msg)
+		// Empty Short = the command already reported the failure itself;
+		// re-printing it with a "yum:" prefix just duplicates the line.
+		if msg != "" {
+			fmt.Fprintf(os.Stderr, "%s %s\n", theme.Err.Render("yum:"), msg)
+		}
 		if ec != nil && ec.Code > 0 {
 			os.Exit(ec.Code)
 		}

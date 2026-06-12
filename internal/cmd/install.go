@@ -11,6 +11,7 @@ import (
 
 	"github.com/hunchom/bodega/internal/backend"
 	"github.com/hunchom/bodega/internal/journal"
+	"github.com/hunchom/bodega/internal/ui"
 	"github.com/hunchom/bodega/internal/ui/theme"
 	"github.com/hunchom/bodega/internal/version"
 )
@@ -68,13 +69,27 @@ func runInstall(app *AppCtx, names []string) error {
 		}
 		_ = rerr
 
-		if app.W.IsTTY() && !app.W.JSON {
+		useLive := app.W.IsTTY() && !app.W.JSON
+		if useLive {
 			app.W.Printf("%s %s %s\n", theme.Muted.Render("→"), theme.Muted.Render("installing"), theme.Bold.Render(n))
 		}
 
+		// Live TTY: spinners/bars + restyled brew passthrough, so big
+		// downloads stop looking frozen. Otherwise buffer for the
+		// on-failure dump.
 		var buf bytes.Buffer
-		pw := &backend.StreamPW{W: &buf}
+		var pw backend.ProgressWriter
+		var lv *ui.Live
+		if useLive {
+			lv = ui.NewLive(app.W.Out)
+			pw = &livePW{L: lv}
+		} else {
+			pw = &backend.StreamPW{W: &buf}
+		}
 		err := app.Registry.Primary().Install(app.Ctx, []string{n}, pw)
+		if lv != nil {
+			lv.Close()
+		}
 		if err != nil {
 			last = err
 			exit = 1
@@ -82,7 +97,7 @@ func runInstall(app *AppCtx, names []string) error {
 			if !app.W.JSON {
 				app.W.Errorf("%s %s: %s\n", theme.Err.Render("✗"), n, err.Error())
 				_ = app.ensureCfg()
-				if app.Cfg == nil || !app.Cfg.Defaults.Parallel || os.Getenv("YUM_DEBUG") != "" {
+				if buf.Len() > 0 && (app.Cfg == nil || !app.Cfg.Defaults.Parallel || os.Getenv("YUM_DEBUG") != "") {
 					app.W.Errorf("%s\n", buf.String())
 				}
 			}
@@ -92,7 +107,7 @@ func runInstall(app *AppCtx, names []string) error {
 			Name: n, ToVersion: versionOf(app, n), Source: src, Action: "installed",
 		})
 		installed = append(installed, n)
-		if !app.W.JSON {
+		if !app.W.JSON && lv == nil { // Live already showed per-pkg ✓
 			app.W.Printf("%s %s\n", theme.OK.Render("✓"), n)
 		}
 	}

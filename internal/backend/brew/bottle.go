@@ -251,12 +251,32 @@ func Relocate(ctx context.Context, packageRoot string, opts RelocateOptions) err
 		}
 		return nil
 	}
+	// Fixups are per-file independent; fan out. llvm-sized kegs carry
+	// thousands of Mach-O files and the otool/install_name_tool/codesign
+	// subprocess round-trips dominate relocate wall time.
+	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+	var (
+		wg       sync.WaitGroup
+		fixupMu  sync.Mutex
+		fixupErr error
+	)
 	for _, f := range machOFiles {
-		if err := fixMachO(ctx, f, opts); err != nil {
-			return fmt.Errorf("mach-o fixup %s: %w", f, err)
-		}
+		wg.Add(1)
+		go func(f string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if err := fixMachO(ctx, f, opts); err != nil {
+				fixupMu.Lock()
+				if fixupErr == nil {
+					fixupErr = fmt.Errorf("mach-o fixup %s: %w", f, err)
+				}
+				fixupMu.Unlock()
+			}
+		}(f)
 	}
-	return nil
+	wg.Wait()
+	return fixupErr
 }
 
 // withDefaults fills in derived paths for any zero fields on opts. We

@@ -41,13 +41,17 @@ func installWithStubbedAPICache(t *testing.T, ac *APICache) {
 	apiCacheDisabled = false
 	// Disable the native index so the resolver uses our stubbed API cache rather
 	// than the host's real index.db (or trying to build one over the network).
+	prevIndexDisabled := indexDisabled
 	indexDisabled = true
 
 	t.Cleanup(func() {
 		sharedAPICacheOnce = sync.Once{}
 		sharedAPICache = nil
 		apiCacheDisabled = false
-		indexDisabled = false
+		// Restore, don't hardcode: TestMain runs the whole package with the
+		// index disabled; forcing false here leaked the host's real index
+		// into every later test.
+		indexDisabled = prevIndexDisabled
 	})
 }
 
@@ -70,9 +74,10 @@ func TestInstallNative_ErrNativeUnsupported_NoAPICache(t *testing.T) {
 	// apiCacheDisabled=true makes apiCache() return nil; indexDisabled keeps the
 	// native index out so neither source is available.
 	prev := apiCacheDisabled
+	prevIdx := indexDisabled
 	apiCacheDisabled = true
 	indexDisabled = true
-	t.Cleanup(func() { apiCacheDisabled = prev; indexDisabled = false })
+	t.Cleanup(func() { apiCacheDisabled = prev; indexDisabled = prevIdx })
 
 	b := &Brew{}
 	_, err := b.InstallNative(context.Background(), []string{"ripgrep"}, InstallOpts{DryRun: true})
