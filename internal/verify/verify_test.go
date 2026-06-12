@@ -3,6 +3,7 @@ package verify
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -280,5 +281,107 @@ end
 	}
 	if len(wantSet) != 0 {
 		t.Fatalf("missing expected deps %v, issues=%+v", wantSet, r.Issues)
+	}
+}
+
+// stubCaskApps maps tokens to app bundle names for the cask-app check.
+type stubCaskApps map[string][]string
+
+func (s stubCaskApps) CaskApps(token string) ([]string, error) { return s[token], nil }
+
+func TestRunNestedBrokenSymlink(t *testing.T) {
+	prefix := t.TempDir()
+	mkCellar(t, prefix, "zstd", "1.5.7")
+	mkOpt(t, prefix, "zstd", "1.5.7")
+
+	// Dangling link three levels down — the old top-level-only scan missed
+	// exactly this shape (lib/cmake/<pkg>/*.cmake).
+	nested := filepath.Join(prefix, "lib", "cmake", "zstd")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(prefix, "Cellar", "zstd", "0.0", "gone.cmake"), filepath.Join(nested, "gone.cmake")); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Run(Options{Prefix: prefix, APIDeps: stubDeps{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, is := range r.Issues {
+		if is.Kind == KindBrokenSymlink && filepath.Base(is.Path) == "gone.cmake" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("nested dangling link not detected: %+v", r.Issues)
+	}
+}
+
+func TestRunStaleLink(t *testing.T) {
+	prefix := t.TempDir()
+	old := mkCellar(t, prefix, "pnpm", "11.5.3")
+	mkCellar(t, prefix, "pnpm", "11.6.0")
+	mkOpt(t, prefix, "pnpm", "11.6.0")
+
+	// bin/pnpm still points at the OLD keg — resolves fine, but wrong.
+	if err := os.WriteFile(filepath.Join(old, "bin", "pnpm"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../Cellar/pnpm/11.5.3/bin/pnpm", filepath.Join(prefix, "bin", "pnpm")); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Run(Options{Prefix: prefix, APIDeps: stubDeps{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, is := range r.Issues {
+		if is.Kind == KindStaleLink && is.Package == "pnpm" {
+			found = true
+			if !strings.Contains(is.Detail, "11.5.3") || !strings.Contains(is.Detail, "11.6.0") {
+				t.Errorf("detail should name both versions: %q", is.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("stale link not detected: %+v", r.Issues)
+	}
+}
+
+func TestRunCaskAppMissing(t *testing.T) {
+	prefix := t.TempDir()
+	apps := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, "Caskroom", "docker-desktop", "4.49.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(prefix, "Caskroom", "ghostty", "1.3.1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// ghostty's app is present; docker's was trashed by hand.
+	if err := os.MkdirAll(filepath.Join(apps, "Ghostty.app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Run(Options{Prefix: prefix, APIDeps: stubDeps{}, AppsDir: apps, CaskApps: stubCaskApps{
+		"docker-desktop": {"Docker.app"},
+		"ghostty":        {"Ghostty.app"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hits []string
+	for _, is := range r.Issues {
+		if is.Kind == KindCaskAppGone {
+			hits = append(hits, is.Package)
+		}
+	}
+	if len(hits) != 1 || hits[0] != "docker-desktop" {
+		t.Fatalf("cask-app-missing hits=%v want [docker-desktop]", hits)
 	}
 }

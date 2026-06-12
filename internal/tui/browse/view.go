@@ -128,9 +128,17 @@ func (m *model) renderRow(s styles, idx int, selected bool, width int) string {
 	if ver == "" {
 		ver = "-"
 	}
-	// Reserve right-hand room for the version column.
+	// Reserve right-hand room for the version column. The selected layout
+	// carries one extra cell (▎ mark + padded highlight); without shaving
+	// the name cell, the row lands at width+1 and the pane wraps it —
+	// splitting an SGR escape across lines and leaking "8;2;...m" garbage
+	// into the terminal.
 	verW := 10
-	nameW := max(width-verW-3, 6)
+	pad := 3 // "  " gutter + name/version separator
+	if selected {
+		pad = 4 // ▎ + highlight padding both sides + separator
+	}
+	nameW := max(width-verW-pad, 6)
 
 	nameCell := padRight(truncStr(name, nameW), nameW)
 	verCell := truncStr(ver, verW)

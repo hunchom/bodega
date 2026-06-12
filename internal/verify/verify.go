@@ -39,6 +39,8 @@ const (
 	KindOrphaned      IssueKind = "orphaned"
 	KindStalePin      IssueKind = "stale-pin"
 	KindUnreadable    IssueKind = "unreadable"
+	KindStaleLink     IssueKind = "stale-link"       // prefix link resolves into a non-linked keg version
+	KindCaskAppGone   IssueKind = "cask-app-missing" // cask installed but its .app left /Applications
 )
 
 // Issue is one finding in the verify report. Package names the formula the
@@ -65,14 +67,26 @@ type DepResolver interface {
 	Deps(name string) ([]string, error)
 }
 
+// CaskAppResolver maps an installed cask token to the .app bundle names its
+// artifact list installs into /Applications. In production this is backed by
+// the native index; nil short-circuits the cask-app check.
+type CaskAppResolver interface {
+	CaskApps(token string) ([]string, error)
+}
+
 // Options configures a verify run. Prefix defaults to brew.Prefix() when
 // empty. Fix=true enables safe auto-remediation — currently just broken
 // symlink removal. APIDeps is required for the missing-dep check to be
 // useful; nil is treated as "no deps known" and short-circuits that check.
 type Options struct {
-	Prefix  string
-	Fix     bool
-	APIDeps DepResolver
+	Prefix   string
+	Fix      bool
+	APIDeps  DepResolver
+	CaskApps CaskAppResolver
+
+	// AppsDir is where cask .app bundles land; defaults to /Applications.
+	// Tests point it at a fixture dir.
+	AppsDir string
 }
 
 // Run executes every check against opts.Prefix and returns a Report. It
@@ -90,8 +104,10 @@ func Run(opts Options) (*Report, error) {
 	var issues []Issue
 	issues = append(issues, checkMissingDeps(prefix, opts.APIDeps)...)
 	issues = append(issues, checkBrokenSymlinks(prefix, opts.Fix)...)
+	issues = append(issues, checkStaleLinks(prefix)...)
 	issues = append(issues, checkOrphaned(prefix)...)
 	issues = append(issues, checkStalePins(prefix)...)
+	issues = append(issues, checkCaskApps(prefix, opts.CaskApps, opts.AppsDir)...)
 
 	sort.SliceStable(issues, func(i, j int) bool {
 		if issues[i].Kind != issues[j].Kind {
@@ -181,31 +197,153 @@ func symlinkDirs() []string {
 	return []string{"bin", "sbin", "lib", "include", "share", "opt"}
 }
 
-func checkBrokenSymlinks(prefix string, fix bool) []Issue {
-	var out []Issue
-	for _, sub := range symlinkDirs() {
-		dir := filepath.Join(prefix, sub)
+// maxSymlinkDepth caps the recursive walk. Brew trees nest links a few
+// levels down (lib/cmake/<pkg>/*.cmake, share/man/man1/*); six covers the
+// deepest real layouts without letting a pathological tree stall verify.
+const maxSymlinkDepth = 6
+
+// walkPrefixSymlinks visits every symlink under prefix/<symlinkDirs>, to
+// maxSymlinkDepth, calling visit with the link path. Directories are
+// descended; directory SYMLINKS are visited but not descended (their
+// contents belong to the link target's owner).
+func walkPrefixSymlinks(prefix string, visit func(p string)) {
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if depth > maxSymlinkDepth {
+			return
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue // missing subdir is fine
+			return
 		}
 		for _, e := range entries {
 			p := filepath.Join(dir, e.Name())
-			lst, err := os.Lstat(p)
-			if err != nil || lst.Mode()&os.ModeSymlink == 0 {
+			if e.Type()&os.ModeSymlink != 0 {
+				visit(p)
 				continue
 			}
-			if _, err := os.Stat(p); err == nil {
+			if e.IsDir() {
+				walk(p, depth+1)
+			}
+		}
+	}
+	for _, sub := range symlinkDirs() {
+		walk(filepath.Join(prefix, sub), 1)
+	}
+}
+
+func checkBrokenSymlinks(prefix string, fix bool) []Issue {
+	var out []Issue
+	walkPrefixSymlinks(prefix, func(p string) {
+		if _, err := os.Stat(p); err == nil {
+			return
+		}
+		// Best-effort resolve of the raw link target for a useful
+		// Detail; ignore errors because Lstat already succeeded.
+		tgt, _ := os.Readlink(p)
+		issue := Issue{Kind: KindBrokenSymlink, Path: p, Detail: tgt}
+		if fix {
+			_ = os.Remove(p)
+		}
+		out = append(out, issue)
+	})
+	return out
+}
+
+// checkStaleLinks flags prefix links that RESOLVE fine but point into a keg
+// version other than the one opt/<pkg> links — the half-upgraded state a
+// crashed or pre-fix upgrade leaves behind. Dangling links are the broken-
+// symlink check's job; this one catches the subtler wrong-but-working kind.
+func checkStaleLinks(prefix string) []Issue {
+	cellarRoot := filepath.Join(prefix, "Cellar")
+	// opt-linked version per package, resolved once.
+	linked := map[string]string{}
+	if entries, err := os.ReadDir(filepath.Join(prefix, "opt")); err == nil {
+		for _, e := range entries {
+			if tgt, err := os.Readlink(filepath.Join(prefix, "opt", e.Name())); err == nil {
+				linked[e.Name()] = filepath.Base(tgt)
+			}
+		}
+	}
+	if len(linked) == 0 {
+		return nil
+	}
+
+	var out []Issue
+	walkPrefixSymlinks(prefix, func(p string) {
+		if strings.HasPrefix(p, filepath.Join(prefix, "opt")+string(filepath.Separator)) {
+			return // opt links ARE the version authority
+		}
+		if _, err := os.Stat(p); err != nil {
+			return // dangling — other check's finding
+		}
+		raw, err := os.Readlink(p)
+		if err != nil {
+			return
+		}
+		resolved := raw
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(filepath.Dir(p), raw)
+		}
+		rel, err := filepath.Rel(cellarRoot, filepath.Clean(resolved))
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return // not a Cellar link — npm, user stuff: not ours to judge
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) < 2 {
+			return
+		}
+		pkg, ver := parts[0], parts[1]
+		if want, ok := linked[pkg]; ok && ver != want {
+			out = append(out, Issue{
+				Kind:    KindStaleLink,
+				Package: pkg,
+				Path:    p,
+				Detail:  "points at " + ver + ", linked is " + want + " — `yum reinstall " + pkg + "`",
+			})
+		}
+	})
+	return out
+}
+
+// checkCaskApps flags installed casks whose .app bundle no longer exists in
+// the applications dir — the state that makes `brew upgrade` fail with
+// "It seems the App source ... is not there" (manually trashed app).
+func checkCaskApps(prefix string, resolver CaskAppResolver, appsDir string) []Issue {
+	if resolver == nil {
+		return nil
+	}
+	if appsDir == "" {
+		appsDir = "/Applications"
+	}
+	caskroom := filepath.Join(prefix, "Caskroom")
+	entries, err := os.ReadDir(caskroom)
+	if err != nil {
+		return nil
+	}
+	var out []Issue
+	for _, e := range entries {
+		token := e.Name()
+		if !e.IsDir() || strings.HasPrefix(token, ".") {
+			continue
+		}
+		apps, err := resolver.CaskApps(token)
+		if err != nil {
+			continue
+		}
+		for _, app := range apps {
+			// App names come from index data, but never let one path-escape.
+			if app == "" || app != filepath.Base(app) {
 				continue
 			}
-			// Best-effort resolve of the raw link target for a useful
-			// Detail; ignore errors because Lstat already succeeded.
-			tgt, _ := os.Readlink(p)
-			issue := Issue{Kind: KindBrokenSymlink, Path: p, Detail: tgt}
-			if fix {
-				_ = os.Remove(p)
+			if _, err := os.Stat(filepath.Join(appsDir, app)); err != nil {
+				out = append(out, Issue{
+					Kind:    KindCaskAppGone,
+					Package: token,
+					Path:    filepath.Join(appsDir, app),
+					Detail:  "app missing — `yum upgrade " + token + "` will auto-reinstall",
+				})
 			}
-			out = append(out, issue)
 		}
 	}
 	return out

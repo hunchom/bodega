@@ -43,9 +43,10 @@ func newVerifyCmd() *cobra.Command {
 			defer app.CloseJournal()
 
 			rep, err := verify.Run(verify.Options{
-				Prefix:  brew.Prefix(),
-				Fix:     fix,
-				APIDeps: apiDepResolver{},
+				Prefix:   brew.Prefix(),
+				Fix:      fix,
+				APIDeps:  apiDepResolver{},
+				CaskApps: caskAppResolver{app: app},
 			})
 			if err != nil {
 				return err
@@ -78,9 +79,23 @@ func newVerifyCmd() *cobra.Command {
 var allKinds = []verify.IssueKind{
 	verify.KindMissingDep,
 	verify.KindBrokenSymlink,
+	verify.KindStaleLink,
 	verify.KindOrphaned,
 	verify.KindStalePin,
 	verify.KindUnreadable,
+	verify.KindCaskAppGone,
+}
+
+// caskAppResolver adapts the brew backend's index-backed cask artifact
+// lookup to verify.CaskAppResolver.
+type caskAppResolver struct{ app *AppCtx }
+
+func (r caskAppResolver) CaskApps(token string) ([]string, error) {
+	bb, ok := r.app.Registry.Primary().(*brew.Brew)
+	if !ok {
+		return nil, nil
+	}
+	return bb.CaskApps(r.app.Ctx, token)
 }
 
 func renderReport(app *AppCtx, rep *verify.Report) {
@@ -133,6 +148,8 @@ func formatIssue(is verify.Issue) string {
 		return is.Path
 	case verify.KindStalePin:
 		return is.Package
+	case verify.KindStaleLink, verify.KindCaskAppGone:
+		return fmt.Sprintf("%s (%s)", is.Path, is.Detail)
 	case verify.KindUnreadable:
 		if is.Path != "" {
 			return fmt.Sprintf("%s: %s", is.Path, is.Detail)

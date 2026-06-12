@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/hunchom/bodega/internal/backend"
 )
@@ -197,4 +198,29 @@ func TestWindowResize(t *testing.T) {
 	}
 	// Re-render shouldn't panic on a narrow window.
 	_ = m.View()
+}
+
+// TestRenderRowFitsWidth: a selected row rendering even one cell wider than
+// the pane makes lipgloss wrap it, splitting an SGR escape across lines and
+// leaking "8;2;...m" fragments into the terminal.
+func TestRenderRowFitsWidth(t *testing.T) {
+	m := newModel(nil, nil, nil)
+	m.pkgs = []backend.Package{
+		{Name: "libmagic", Version: "5.48", Source: backend.SrcFormula},
+		{Name: "a-very-long-package-name-that-truncates", Version: "10.20.30_4", Source: backend.SrcFormula},
+	}
+	m.filtered = []int{0, 1}
+	s := newStyles()
+
+	for _, width := range []int{20, 32, 47, 80} {
+		for idx := range m.pkgs {
+			for _, selected := range []bool{true, false} {
+				row := m.renderRow(s, idx, selected, width)
+				if got := lipgloss.Width(row); got > width {
+					t.Errorf("width=%d idx=%d selected=%v: row is %d cells wide:\n%q",
+						width, idx, selected, got, row)
+				}
+			}
+		}
+	}
 }

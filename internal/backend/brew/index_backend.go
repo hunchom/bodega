@@ -216,3 +216,14 @@ func (b *Brew) RefreshIndex(ctx context.Context, force bool) (bool, error) {
 	}
 	return st.EnsureFresh(ctx, indexSource(), index.DefaultMaxAge)
 }
+
+// CaskApps returns the .app bundles the installed cask token places in
+// /Applications, per the native index's artifact data. Empty when the index
+// is cold or the token is unknown — callers treat that as "nothing to check".
+func (b *Brew) CaskApps(ctx context.Context, token string) ([]string, error) {
+	st := readyIndex(ctx)
+	if st == nil {
+		return nil, nil
+	}
+	return st.CaskApps(token)
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -301,4 +302,42 @@ func (s *Store) AllFormulaNames() ([]string, error) {
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// CaskApps returns the .app bundle names a cask's artifact stanza installs
+// into /Applications. Non-app artifacts (binary, pkg, zap) are ignored, as
+// are non-string app entries (target-renamed maps).
+func (s *Store) CaskApps(token string) ([]string, error) {
+	row := s.db.QueryRowContext(context.Background(),
+		`SELECT raw FROM casks WHERE token=?`, token)
+	var raw []byte
+	if err := row.Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var c struct {
+		Artifacts []map[string]json.RawMessage `json:"artifacts"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, a := range c.Artifacts {
+		v, ok := a["app"]
+		if !ok {
+			continue
+		}
+		var items []any
+		if err := json.Unmarshal(v, &items); err != nil {
+			continue
+		}
+		for _, it := range items {
+			if s, ok := it.(string); ok && strings.HasSuffix(s, ".app") {
+				out = append(out, s)
+			}
+		}
+	}
+	return out, nil
 }
